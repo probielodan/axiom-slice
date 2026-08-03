@@ -1,532 +1,242 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-const App = () => {
-    const [isLoading, setIsLoading] = useState(true);
-    const [models, setModels] = useState([]);
-    const [projectName, setProjectName] = useState('');
-    const [slicerOptions, setSlicerOptions] = useState([]);
-    const [commandOptions, setCommandOptions] = useState([]);
-    const [selectedConfigs, setSelectedConfigs] = useState({
-        filament: '',
-        machine: '',
-        process: '',
-    });
-    const [configOptions, setConfigOptions] = useState([
-        { machine: [] },
-        { filament: [] },
-        { process: [] },
-    ]);
-    const [isSlicing, setIsSlicing] = useState(false);
-    const [log, setLog] = useState([]);
-    const logContainerRef = useRef(null);
-    const fileUploadRef = useRef(null);
-    const [error, setError] = useState(null);
-    const [configError, setConfigError] = useState(null);
-    const ansiColorMap = {
-        '31': 'text-red-500',   // RED
-        '32': 'text-green-500', // GREEN
-        '33': 'text-yellow-500',// YELLOW
-        '34': 'text-blue-400',  // BLUE
-        '36': 'text-cyan-400',  // CYAN
-        '0': 'text-gray-400',   // Reset (No Color)
-    };
-    const [dark, setDark] = useState(
-        window.matchMedia("(prefers-color-scheme: dark)").matches
-    );
+const API = '/api/v1'
+const terminal = new Set(['succeeded', 'failed', 'cancelled'])
 
-    useEffect(() => {
-        const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-        const handleChange = (e) => setDark(e.matches);
+function bytes(value = 0) {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`
+  return `${(value / 1024 ** 2).toFixed(1)} MiB`
+}
 
-        mediaQuery.addEventListener("change", handleChange);
-        return () => mediaQuery.removeEventListener("change", handleChange);
-    }, []);
+function elapsed(job) {
+  const start = job.started_at || job.created_at
+  const end = job.finished_at || new Date().toISOString()
+  return start ? `${Math.max(0, (Date.parse(end) - Date.parse(start)) / 1000).toFixed(1)}s` : '—'
+}
 
-    useEffect(() => {
-        const fetchState = async () => {
-            try {
-                const configResponse = await fetch('/api/configs');
-                if (!configResponse.ok) {
-                    throw new Error('Failed to fetch configurations.');
-                }
-                const configData = await configResponse.json();
+function App() {
+  const [token, setToken] = useState(() => localStorage.getItem('axiom-token') || '')
+  const [draftToken, setDraftToken] = useState(token)
+  const [profiles, setProfiles] = useState(null)
+  const [jobs, setJobs] = useState([])
+  const [selectedId, setSelectedId] = useState(null)
+  const [selected, setSelected] = useState(null)
+  const [logs, setLogs] = useState([])
+  const [preview, setPreview] = useState(null)
+  const [files, setFiles] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [printer, setPrinter] = useState(null)
+  const [form, setForm] = useState({ project_name: 'axiom-slice', machine: '', process: '', filament: '', auto_orient: true, export_3mf: false })
+  const [overrides, setOverrides] = useState({})
+  const [enabledOverrides, setEnabledOverrides] = useState({})
+  const fileRef = useRef(null)
 
-                const stateResponse = await fetch('/api/slicer-state');
-                if (!stateResponse.ok) {
-                    throw new Error('Failed to fetch slicer state.');
-                }
-                const slicerState = await stateResponse.json();
+  const request = useCallback(async (path, options = {}) => {
+    const headers = new Headers(options.headers || {})
+    headers.set('Authorization', `Bearer ${token}`)
+    const response = await fetch(`${API}${path}`, { ...options, headers })
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`
+      try { detail = (await response.json()).detail || detail } catch { /* not JSON */ }
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    }
+    return response
+  }, [token])
 
-                let finalSelectedConfigs = { ...slicerState.selectedConfigs };
+  const loadJobs = useCallback(async () => {
+    if (!token) return
+    try {
+      const data = await (await request('/jobs?limit=40')).json()
+      setJobs(data.jobs)
+      if (!selectedId && data.jobs.length) setSelectedId(data.jobs[0].id)
+    } catch (error) {
+      if (String(error).includes('401')) setToken('')
+      setNotice(error.message)
+    }
+  }, [request, selectedId, token])
 
-                configData.map((configObject) => {
-                    const [configType, availableOptions] = Object.entries(configObject)[0]
-                    if (slicerState.selectedConfigs) {
-                        const savedValue = slicerState.selectedConfigs[configType];
-                        if (!savedValue || !availableOptions.includes(savedValue)) {
-                            finalSelectedConfigs = {
-                                ...finalSelectedConfigs,
-                                [configType]: availableOptions[0] || '',
-                            };
-                        }
-                    }
-                })
+  useEffect(() => {
+    if (!token) return
+    let live = true
+    Promise.all([request('/profiles').then((response) => response.json()), request('/printer/status').then((response) => response.json()).catch(() => null)])
+      .then(([profileData, printerData]) => {
+        if (!live) return
+        setProfiles(profileData)
+        setPrinter(printerData?.printer || null)
+        setForm((current) => ({ ...current, ...profileData.defaults }))
+        const initial = {}
+        Object.entries(profileData.overrides).forEach(([name, spec]) => {
+          initial[name] = spec.type === 'boolean' ? false : spec.type === 'enum' ? spec.values[0] : spec.minimum
+        })
+        setOverrides(initial)
+        loadJobs()
+      }).catch((error) => { if (live) setNotice(error.message) })
+    return () => { live = false }
+  }, [loadJobs, request, token])
 
-                setConfigOptions(configData);
-                setSelectedConfigs(finalSelectedConfigs);
-                setSlicerOptions(slicerState.slicerOptions);
-                setCommandOptions(slicerState.commandOptions);
-            } catch (err) {
-                console.error('Fetch error:', err);
-                setConfigError(`${err.message}`);
-            } finally {
-                setIsLoading(false);
+  useEffect(() => {
+    if (!token) return undefined
+    const timer = setInterval(loadJobs, 3000)
+    return () => clearInterval(timer)
+  }, [loadJobs, token])
+
+  useEffect(() => {
+    if (!selectedId || !token) return undefined
+    let live = true
+    const refresh = async () => {
+      try {
+        const job = await (await request(`/jobs/${selectedId}`)).json()
+        if (live) setSelected(job)
+      } catch (error) { if (live) setNotice(error.message) }
+    }
+    refresh()
+    const timer = setInterval(refresh, 1500)
+    return () => { live = false; clearInterval(timer) }
+  }, [request, selectedId, token])
+
+  useEffect(() => {
+    if (!selectedId || !token) return undefined
+    const controller = new AbortController()
+    setLogs([])
+    ;(async () => {
+      try {
+        const response = await request(`/jobs/${selectedId}/events`, { signal: controller.signal })
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const blocks = buffer.split('\n\n')
+          buffer = blocks.pop() || ''
+          blocks.forEach((block) => {
+            const line = block.split('\n').find((entry) => entry.startsWith('data: '))
+            const event = block.split('\n').find((entry) => entry.startsWith('event: '))?.slice(7)
+            if (line && event === 'log') {
+              try { setLogs((current) => [...current, JSON.parse(line.slice(6))]) } catch { /* partial line */ }
             }
-        };
-        fetchState();
-    }, []);
-
-    useEffect(() => {
-        if (logContainerRef.current) {
-            logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+          })
         }
-    }, [log]);
+      } catch (error) { if (error.name !== 'AbortError') setNotice(error.message) }
+    })()
+    return () => controller.abort()
+  }, [request, selectedId, token])
 
-    const saveSettings = async (dataToSave) => {
-        try {
-            const response = await fetch('/api/slicer-state', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(dataToSave),
-            });
+  const thumbnailName = useMemo(() => {
+    const names = Object.keys(selected?.artifacts || {}).filter((name) => name.endsWith('.png'))
+    return names.find((name) => name.includes('300x300')) || names.at(-1)
+  }, [selected])
 
-            if (!response.ok) {
-                throw new Error('Failed to save settings.');
-            }
-        } catch (err) {
-            console.error('Save error:', err);
-        }
-    };
+  useEffect(() => {
+    if (!thumbnailName || !selectedId) { setPreview(null); return undefined }
+    let url
+    let live = true
+    request(`/jobs/${selectedId}/artifacts/${encodeURIComponent(thumbnailName)}`).then((response) => response.blob())
+      .then((blob) => { if (live) { url = URL.createObjectURL(blob); setPreview(url) } }).catch(() => setPreview(null))
+    return () => { live = false; if (url) URL.revokeObjectURL(url) }
+  }, [request, selectedId, thumbnailName])
 
-    const handleConfigInputChange = (e) => {
-        const { id, value } = e.target;
-        setSelectedConfigs(prevOptions => {
-            const updated = {
-                ...prevOptions,
-                [id]: value,
-            }
-            saveSettings({ selectedConfigs: updated })
-            return updated;
-        });
-    };
+  const login = (event) => {
+    event.preventDefault()
+    const value = draftToken.trim()
+    localStorage.setItem('axiom-token', value)
+    setToken(value)
+    setNotice('')
+  }
+  const logout = () => { localStorage.removeItem('axiom-token'); setToken(''); setProfiles(null) }
 
-    const updateSectionSetting = (sections, sectionName, settingName, value) => {
-        return sections.map(section => {
-            if (section.section === sectionName) {
-                const updatedSettings = section.settings.map(setting => {
-                    if (setting.setting === settingName) {
-                        if (setting.type === 'integer') return { ...setting, value: parseInt(value) };
-                        if (setting.type === 'float') return { ...setting, value: parseFloat(value) };
-                        return { ...setting, value: value };
-                    }
-                    return setting;
-                });
-                return { ...section, settings: updatedSettings };
-            }
-            return section;
-        });
-    };
+  const submit = async (event) => {
+    event.preventDefault()
+    if (!files.length) { setNotice('Choose at least one STL or 3MF model.'); return }
+    setBusy(true); setNotice('')
+    const chosen = Object.fromEntries(Object.entries(overrides).filter(([name]) => enabledOverrides[name]))
+    const data = new FormData()
+    files.forEach((file) => data.append('models', file))
+    data.append('request', JSON.stringify({ ...form, overrides: chosen }))
+    try {
+      const job = await (await request('/jobs', { method: 'POST', body: data })).json()
+      setSelectedId(job.id); setFiles([])
+      if (fileRef.current) fileRef.current.value = ''
+      await loadJobs()
+    } catch (error) { setNotice(error.message) } finally { setBusy(false) }
+  }
 
-    const handleCommandInputChange = (sectionName, settingName, value) => {
-        setCommandOptions(prev => {
-            const updated = updateSectionSetting(prev, sectionName, settingName, value)
-            saveSettings({ commandOptions: updated })
-            return updated
-        });
-    };
+  const action = async (path, confirmation) => {
+    if (confirmation && !window.confirm(confirmation)) return
+    setBusy(true); setNotice('')
+    try {
+      await request(path, { method: 'POST', headers: confirmation ? { 'Content-Type': 'application/json' } : {}, body: confirmation ? JSON.stringify({ confirm: true }) : undefined })
+      setSelected(await (await request(`/jobs/${selectedId}`)).json())
+      setNotice(confirmation ? 'Print started.' : 'Action completed.')
+    } catch (error) { setNotice(error.message) } finally { setBusy(false) }
+  }
 
-    const handleSlicerInputChange = (sectionName, settingName, value) => {
-        setSlicerOptions(prev => updateSectionSetting(prev, sectionName, settingName, value));
-    };
+  const download = async (name) => {
+    try {
+      const blob = await (await request(`/jobs/${selectedId}/artifacts/${encodeURIComponent(name)}`)).blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); URL.revokeObjectURL(url)
+    } catch (error) { setNotice(error.message) }
+  }
 
-    const parseAnsiCodes = (rawMessage) => {
-        let cleanMessage = rawMessage;
-        let colorClass = 'text-gray-400';
-        /* eslint-disable no-control-regex */
-        const ansiRegex = /\x1b\[(\d+)m/g;
-        const match = ansiRegex.exec(rawMessage);
+  if (!token) return <main className="login-shell"><form className="login-card" onSubmit={login}>
+    <div className="mark">A</div><p className="eyebrow">Private slicing service</p><h1>Axiom Slice</h1>
+    <p>Enter the bearer token stored for this service. It remains in this browser only.</p>
+    <input autoFocus type="password" value={draftToken} onChange={(event) => setDraftToken(event.target.value)} placeholder="Bearer token" />
+    <button disabled={!draftToken.trim()}>Connect</button>{notice && <p className="error">{notice}</p>}
+  </form></main>
 
-        if (match) {
-            const code = match[1];
-            if (ansiColorMap[code]) {
-                colorClass = ansiColorMap[code];
-            }
-        }
-        cleanMessage = rawMessage.replace(ansiRegex, '');
-        return { cleanMessage, colorClass };
-    };
+  if (!profiles) return <main className="loading"><div className="spinner" /><p>Loading Axiom Slice…</p>{notice && <button onClick={logout}>Reset token</button>}</main>
 
-    const output = (message) => {
-        const { cleanMessage, colorClass } = parseAnsiCodes(message);
-        setLog((prevLog) => [...prevLog, { message: cleanMessage, color: colorClass }]);
-    };
+  return <main className="app-shell">
+    <header><div><p className="eyebrow">OrcaSlicer · Isolated worker</p><h1>Axiom Slice</h1></div>
+      <div className="header-status"><span className={`dot ${printer ? 'online' : ''}`} />{printer ? `Printer ${printer.print_stats?.state || 'online'}` : 'Printer unavailable'}<button className="quiet" onClick={logout}>Lock</button></div></header>
+    {notice && <div className="notice" onClick={() => setNotice('')}>{notice}<span>×</span></div>}
+    <section className="workspace">
+      <form className="panel create" onSubmit={submit}>
+        <div className="panel-title"><div><p className="eyebrow">New job</p><h2>Slice a model</h2></div><span className="step">01</span></div>
+        <label>Project name<input value={form.project_name} onChange={(event) => setForm({ ...form, project_name: event.target.value })} /></label>
+        <div className="profile-grid">{['machine', 'process', 'filament'].map((kind) => <label key={kind}>{kind}<select value={form[kind]} onChange={(event) => setForm({ ...form, [kind]: event.target.value })}>
+          {profiles.profiles[kind].map((name) => <option key={name}>{name}</option>)}</select></label>)}</div>
+        <button type="button" className="drop" onClick={() => fileRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setFiles([...event.dataTransfer.files]) }}>
+          <strong>{files.length ? `${files.length} model${files.length === 1 ? '' : 's'} ready` : 'Drop STL or 3MF here'}</strong>
+          <span>{files.length ? files.map((file) => `${file.name} · ${bytes(file.size)}`).join('  •  ') : 'or click to browse'}</span>
+          <input ref={fileRef} hidden type="file" multiple accept=".stl,.3mf" onChange={(event) => setFiles([...event.target.files])} />
+        </button>
+        <div className="checks"><label><input type="checkbox" checked={form.auto_orient} onChange={(event) => setForm({ ...form, auto_orient: event.target.checked })} /> Auto-orient</label>
+          <label><input type="checkbox" checked={form.export_3mf} onChange={(event) => setForm({ ...form, export_3mf: event.target.checked })} /> Export 3MF</label></div>
+        <details><summary>Curated overrides <span>{Object.values(enabledOverrides).filter(Boolean).length} active</span></summary>
+          <div className="override-grid">{Object.entries(profiles.overrides).map(([name, spec]) => <div className={`override ${enabledOverrides[name] ? 'active' : ''}`} key={name}>
+            <label className="enable"><input type="checkbox" checked={!!enabledOverrides[name]} onChange={(event) => setEnabledOverrides({ ...enabledOverrides, [name]: event.target.checked })} />{spec.label}</label>
+            {spec.type === 'boolean' ? <select disabled={!enabledOverrides[name]} value={String(overrides[name])} onChange={(event) => setOverrides({ ...overrides, [name]: event.target.value === 'true' })}><option value="false">No</option><option value="true">Yes</option></select>
+              : spec.type === 'enum' ? <select disabled={!enabledOverrides[name]} value={overrides[name]} onChange={(event) => setOverrides({ ...overrides, [name]: event.target.value })}>{spec.values.map((value) => <option key={value}>{value}</option>)}</select>
+                : <input disabled={!enabledOverrides[name]} type="number" min={spec.minimum} max={spec.maximum} step={spec.type === 'integer' ? 1 : 0.1} value={overrides[name]} onChange={(event) => setOverrides({ ...overrides, [name]: spec.type === 'integer' ? Number.parseInt(event.target.value) : Number.parseFloat(event.target.value) })} />}
+          </div>)}</div></details>
+        <button className="primary" disabled={busy || !files.length}>{busy ? 'Working…' : 'Queue slice'}</button>
+      </form>
 
-    const appendCommandOptions = (formData, options) => {
-        if (options == selectedConfigs) {
-            for (const key in options) {
-                formData.append(key, options[key]);
-            }
-        } else {
-            let slicer_args = []
-            options.forEach(section => {
-                section.settings.forEach(setting => {
-                    if (options == commandOptions) {
-                        formData.append(setting.setting, setting.value);
-                    } else {
-                        if (setting.type === 'boolean') {
-                            if (setting.value) {
-                                slicer_args.push(`--${setting.setting.replaceAll("_", "-")}`);
-                            }
-                        } else {
-                            slicer_args.push(`--${setting.setting.replaceAll("_", "-") }`, setting.value);
-                        }
-                    }
-                });
-            });
-            if (slicer_args.length > 0) {
-                formData.append('slicer_args', JSON.stringify(slicer_args));
-            }
-        }
-    };
+      <section className="panel result">
+        <div className="panel-title"><div><p className="eyebrow">Selected job</p><h2>{selected?.request?.slice?.project_name || 'No job selected'}</h2></div><span className={`badge ${selected?.status || ''}`}>{selected?.status || '—'}</span></div>
+        {!selected ? <div className="empty">Submit a model to begin.</div> : <>
+          <div className="preview"><div className="preview-image">{preview ? <img src={preview} alt="Sliced model thumbnail" /> : <span>No thumbnail yet</span>}</div>
+            <dl><div><dt>Job</dt><dd>{selected.id.slice(0, 12)}</dd></div><div><dt>Elapsed</dt><dd>{elapsed(selected)}</dd></div><div><dt>Models</dt><dd>{selected.request.models.length}</dd></div><div><dt>Artifacts</dt><dd>{Object.keys(selected.artifacts || {}).length}</dd></div></dl></div>
+          {selected.error && <p className="error-block">{selected.error}</p>}
+          <div className="actions"><button disabled={busy || selected.status !== 'succeeded'} onClick={() => action(`/jobs/${selected.id}/printer/upload`)}>Upload to K1</button>
+            <button className="danger" disabled={busy || !selected.result?.printer_file} onClick={() => action(`/jobs/${selected.id}/printer/print`, `Start printing ${selected.result?.printer_file}?\n\nVerify the bed is clear before continuing.`)}>Start print…</button>
+            {!terminal.has(selected.status) && <button className="quiet" onClick={() => action(`/jobs/${selected.id}/cancel`)}>Cancel</button>}</div>
+          <div className="artifact-list">{Object.entries(selected.artifacts || {}).map(([name, metadata]) => <button key={name} onClick={() => download(name)}><span>{name}</span><small>{bytes(metadata.size)}</small></button>)}</div>
+          <div className="log"><div className="log-head"><span>Worker log</span><span>{logs.length} events</span></div><pre>{logs.map((entry) => <div className={entry.level} key={entry.sequence}><i>{entry.level}</i>{entry.message}</div>)}</pre></div>
+        </>}
+      </section>
+    </section>
+    <section className="history"><div className="history-head"><div><p className="eyebrow">Durable queue</p><h2>Recent jobs</h2></div><button className="quiet" onClick={loadJobs}>Refresh</button></div>
+      <div className="job-list">{jobs.map((job) => <button className={job.id === selectedId ? 'selected' : ''} key={job.id} onClick={() => setSelectedId(job.id)}>
+        <span className={`status-line ${job.status}`} /><strong>{job.request.slice.project_name}</strong><span>{job.request.models.map((model) => model.name).join(', ')}</span><small>{new Date(job.created_at).toLocaleString()}</small><em>{job.status}</em>
+      </button>)}</div></section>
+  </main>
+}
 
-    const handleSlice = async (e) => {
-        e.preventDefault();
-        setLog([]);
-        setError(null);
-        setIsSlicing(true);
-
-        const formData = new FormData();
-        models.forEach(model => formData.append('models', model));
-        formData.append('project_name', projectName);
-        appendCommandOptions(formData, selectedConfigs);
-        appendCommandOptions(formData, commandOptions);
-        appendCommandOptions(formData, slicerOptions);
-
-        try {
-            const response = await fetch('/api/slice', {
-                method: 'POST',
-                body: formData,
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                setError(`Server Error: ${errorData.error}`);
-                setIsSlicing(false);
-                return;
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let done = false;
-
-            while (!done) {
-                const { value, done: readerDone } = await reader.read();
-                done = readerDone;
-                const chunk = decoder.decode(value);
-                const newLines = chunk.split('\n').filter(line => line.length > 0);
-                newLines.forEach(line => output(line));
-            }
-
-        } catch (err) {
-            console.error('Slice error:', err);
-            setError('Failed to connect to the slicing server. Is it running?');
-        } finally {
-            setIsSlicing(false);
-        }
-    };
-
-    const handleDragOver = (e) => {
-        e.preventDefault();
-    };
-
-    const handleDrop = (e) => {
-        e.preventDefault();
-        setModels(Array.from(e.dataTransfer.files));
-    };
-
-    const findSetting = (options, settingName) => {
-        for (const section of options) {
-            return section.settings.find(setting => setting.setting === settingName);
-        }
-    };
-
-    const renderConfigOptions = () => {
-        return configOptions.map((configObject) => {
-            const [configType, options] = Object.entries(configObject)[0];
-
-            return (
-                <div key={configType}>
-                    <label
-                        htmlFor={configType}
-                        className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
-                    >
-                        {configType.charAt(0).toUpperCase() + configType.slice(1)}
-                    </label>
-                    <select
-                        id={configType}
-                        value={selectedConfigs[configType]}
-                        onChange={handleConfigInputChange}
-                        className=" -indigo-500 transition duration-200"
-                    >
-                        {options && options.length > 0 ? (
-                            options.map(option => (
-                                <option key={option} value={option}>
-                                    {option}
-                                </option>
-                            ))
-                        ) : (
-                            <option disabled>No {configType}s found</option>
-                        )}
-                    </select>
-                </div>
-            );
-        });
-    };
-
-    const renderOptions = (optionsObject, changeHandler) => {
-        return optionsObject.map(section => (
-            <div key={section.section} className="mb-4">
-                {optionsObject.length > 1 && <h3 className="mb-2 text-lg font-semibold text-gray-700 dark:text-gray-300">{section.section}</h3>}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
-                    {section.settings.map((argConfig) => {
-                        const printerIpSetting = findSetting(optionsObject, 'printer');
-                        const { type, label, helpText, options, value, min, max, setting, placeholder } = argConfig;
-                        const isDisabled = setting == "start_print" && (!printerIpSetting || !printerIpSetting.value);
-
-                        switch (type) {
-                            case 'boolean':
-
-                                if (isDisabled && value) {
-                                    changeHandler(section.section, setting, false);
-                                }
-
-                                return (
-                                    <div key={setting} title={helpText}>
-                                        <label
-                                            htmlFor={setting}
-                                            className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-                                        >
-                                            {label}
-                                        </label>
-                                        <button
-                                            type="button"
-                                            onClick={() => !isDisabled && changeHandler(section.section, setting, !value)}
-                                            disabled={isDisabled}
-                                            className={`w-full h-8 rounded-lg border transition duration-200
-                                                ${isDisabled
-                                                    ? 'bg-gray-200 dark:bg-gray-600 border-gray-300 dark:border-gray-500 cursor-not-allowed opacity-50'
-                                                    : value
-                                                        ? 'bg-indigo-500 border-indigo-600 hover:bg-indigo-300 dark:hover:bg-indigo-700'
-                                                        : 'text-gray-700 border-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600 hover:bg-indigo-200 dark:hover:bg-indigo-800'
-                                                }`}
-                                        >
-                                            <div className={`bg-white dark:bg-gray-200 w-2/3 h-full rounded-lg shadow-md transform transition-transform duration-200 ${value ? 'translate-x-1/2' : ''}`} />
-                                        </button>
-                                    </div>
-                                );
-                            case 'integer':
-                            case 'float':
-                                return (
-                                    <div key={setting} title={helpText}>
-                                        <label htmlFor={setting} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                            {label}
-                                        </label>
-                                        <input
-                                            type="number"
-                                            id={setting}
-                                            value={value}
-                                            onChange={e => changeHandler(section.section, setting, e.target.value)}
-                                            min={min}
-                                            max={max}
-                                            step={type === 'float' ? 'any' : '1'}
-                                            className="w-full px-4 py-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 hover:ring-2 hover:ring-indigo-400 dark:hover:ring-indigo-500 transition duration-200"
-                                        />
-                                    </div>
-                                );
-                            case 'enumeration':
-                                return (
-                                    <div key={setting} title={helpText}>
-                                        <label htmlFor={setting} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                            {label}
-                                        </label>
-                                        <select
-                                            id={setting}
-                                            value={value}
-                                            onChange={e => changeHandler(section.section, setting, e.target.value)}
-                                            className="w-full px-4 py-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 hover:ring-2 hover:ring-indigo-400 dark:hover:ring-indigo-500 transition duration-200"
-                                        >
-                                            {options.map(option => (
-                                                <option key={option.value} value={option.value}>{option.label}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                );
-                            case 'string':
-                                return (
-                                    <div key={setting} title={helpText}>
-                                        <label htmlFor={setting} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                                            {label}
-                                        </label>
-                                        <input
-                                            type="text"
-                                            id={setting}
-                                            value={value}
-                                            onChange={e => changeHandler(section.section, setting, e.target.value)}
-                                            className="w-full px-4 py-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 hover:ring-2 hover:ring-indigo-400 dark:hover:ring-indigo-500 transition duration-200"
-                                            placeholder={placeholder ? placeholder : ""}
-                                        />
-                                    </div>
-                                );
-                            default:
-                                return null;
-                        }
-                    })}
-                </div>
-            </div>
-        ));
-    };
-
-    return (
-        <div className={dark ? "dark" : ""}>
-            <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4 md:p-8 flex items-center justify-center font-sans">
-                {isLoading ? <h1 className="text-5xl font-extrabold text-gray-700 dark:text-gray-300">Loading...</h1> :
-                    <div className="bg-white dark:bg-gray-800 p-3 md:p-8 rounded-2xl shadow-xl w-full border border-gray-200 dark:border-gray-700">
-                        <h1 className="text-4xl font-extrabold text-center text-gray-800 dark:text-gray-300 mb-2">slice.py UI</h1>
-                        <p className="text-center text-gray-700 dark:text-gray-300 mb-8">
-                            A web interface for your OrcaSlicer automation script.
-                        </p>
-
-                        <form onSubmit={handleSlice} className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                            {/* Slicing Configuration Column */}
-                            <div className="flex flex-col gap-6">
-                                <div className="flex flex-col gap-2 bg-gray-50 dark:bg-gray-900 p-4 md:p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-inner">
-                                    <h2 className="text-xl font-bold text-gray-800 dark:text-gray-300 border-b border-gray-300 dark:border-gray-600 pb-1">Configuration</h2>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1" htmlFor="file-upload">
-                                            Model File(s) <span className="text-red-500">*</span>
-                                        </label>
-                                        <div
-                                            className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 dark:border-gray-600 dark:bg-gray-700 border-dashed rounded-md hover:border-gray-400 dark:hover:border-gray-500 transition-colors duration-200 ease-in-out"
-                                            onDragOver={handleDragOver}
-                                            onDrop={handleDrop}
-                                            onClick={() => fileUploadRef.current.click()}
-                                        >
-                                            <div className="space-y-1 text-center">
-                                                <svg className="mx-auto h-12 w-12 fill-gray-400 dark:fill-gray-500" viewBox="0 0 486.3 486.3" aria-hidden="true">
-                                                    <path d="M395.5,135.8c-5.2-30.9-20.5-59.1-43.9-80.5c-26-23.8-59.8-36.9-95-36.9c-27.2,0-53.7,7.8-76.4,22.5    c-18.9,12.2-34.6,28.7-45.7,48.1c-4.8-0.9-9.8-1.4-14.8-1.4c-42.5,0-77.1,34.6-77.1,77.1c0,5.5,0.6,10.8,1.6,16    C16.7,200.7,0,232.9,0,267.2c0,27.7,10.3,54.6,29.1,75.9c19.3,21.8,44.8,34.7,72,36.2c0.3,0,0.5,0,0.8,0h86    c7.5,0,13.5-6,13.5-13.5s-6-13.5-13.5-13.5h-85.6C61.4,349.8,27,310.9,27,267.1c0-28.3,15.2-54.7,39.7-69    c5.7-3.3,8.1-10.2,5.9-16.4c-2-5.4-3-11.1-3-17.2c0-27.6,22.5-50.1,50.1-50.1c5.9,0,11.7,1,17.1,3c6.6,2.4,13.9-0.6,16.9-6.9    c18.7-39.7,59.1-65.3,103-65.3c59,0,107.7,44.2,113.3,102.8c0.6,6.1,5.2,11,11.2,12c44.5,7.6,78.1,48.7,78.1,95.6    c0,49.7-39.1,92.9-87.3,96.6h-73.7c-7.5,0-13.5,6-13.5,13.5s6,13.5,13.5,13.5h74.2c0.3,0,0.6,0,1,0c30.5-2.2,59-16.2,80.2-39.6    c21.1-23.2,32.6-53,32.6-84C486.2,199.5,447.9,149.6,395.5,135.8z" />
-                                                    <path d="M324.2,280c5.3-5.3,5.3-13.8,0-19.1l-71.5-71.5c-2.5-2.5-6-4-9.5-4s-7,1.4-9.5,4l-71.5,71.5c-5.3,5.3-5.3,13.8,0,19.1    c2.6,2.6,6.1,4,9.5,4s6.9-1.3,9.5-4l48.5-48.5v222.9c0,7.5,6,13.5,13.5,13.5s13.5-6,13.5-13.5V231.5l48.5,48.5    C310.4,285.3,318.9,285.3,324.2,280z" />
-                                                </svg>
-
-                                                <div className="flex justify-center text-sm text-gray-700 dark:text-gray-300">
-                                                    <label
-                                                        htmlFor="file-upload"
-                                                        className="relative cursor-pointer bg-transparent rounded-md font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 focus-within:outline-none"
-                                                    >
-                                                        <span>Upload a file</span>
-                                                        <input
-                                                            ref={fileUploadRef}
-                                                            id="file-upload"
-                                                            name="file-upload"
-                                                            type="file"
-                                                            multiple
-                                                            onChange={(e) => setModels(Array.from(e.target.files))}
-                                                            className="sr-only"
-                                                        />
-                                                    </label>
-                                                    <p className="pl-1">or drag and drop</p>
-                                                </div>
-                                                {models.length > 0 ? (
-                                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                                                        Selected: {models.map((f) => f.name).join(', ')}
-                                                    </p>
-                                                ) : <p className="text-xs text-gray-500 dark:text-gray-400">.stl, .3mf</p>
-                                                }
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                            Project Name
-                                        </label>
-                                        <input
-                                            type="text"
-                                            id="projectName"
-                                            value={projectName}
-                                            onChange={(e) => setProjectName(e.target.value)}
-                                            className="w-full px-4 py-1 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 hover:ring-2 hover:ring-indigo-400 dark:hover:ring-indigo-500 transition duration-200"
-                                        />
-                                    </div>
-
-                                    {/* Conditional rendering for configs based on loading state */}
-                                    {configError ? (
-                                        <div className="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-200 p-4 rounded-xl mb-4" role="alert">
-                                            <span className="font-bold">Error:</span> {configError}
-                                        </div>
-                                    ) : (renderConfigOptions())}
-                                </div>
-                                <div className="flex flex-col gap-2 bg-gray-50 dark:bg-gray-900 p-4 md:p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-inner">
-                                    <h2 className="text-xl font-bold text-gray-800 dark:text-gray-300 border-b border-gray-300 dark:border-gray-600 pb-1">Slicer Options</h2>
-                                    {renderOptions(slicerOptions, handleSlicerInputChange)}
-                                    <button
-                                        type="button"
-                                        onClick={() => saveSettings({ slicerOptions: slicerOptions })}
-                                        className="w-full px-6 py-3 rounded-xl font-bold bg-indigo-500 hover:bg-indigo-600 text-gray-100 transition duration-200"
-                                    >
-                                        Save as Defaults
-                                    </button>
-                                </div>
-                                <div className="flex flex-col gap-2 bg-gray-50 dark:bg-gray-900 p-4 md:p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-inner">
-                                    <h2 className="text-xl font-bold text-gray-800 dark:text-gray-300 border-b border-gray-300 dark:border-gray-600 pb-1">Printer & Script Options</h2>
-                                    {renderOptions(commandOptions, handleCommandInputChange)}
-                                </div>
-                            </div>
-
-                            {/* Slicing Log Column */}
-                            <div className="flex flex-col gap-6">
-                                <div ref={logContainerRef} className="bg-gray-50 dark:bg-gray-900 p-6 rounded-xl flex-grow h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 shadow-inner">
-                                    <h2 className="text-xl font-bold text-gray-800 dark:text-gray-300 border-b border-gray-300 dark:border-gray-600 pb-1 mb-4">Slicing Log</h2>
-                                    {log.map((entry, index) => (
-                                        <p key={index} className={`font-mono text-sm ${entry.color}`}>
-                                            {entry.message}
-                                        </p>
-                                    ))}
-                                    {isSlicing && (
-                                        <p className="font-mono text-sm text-blue-400 animate-pulse">Processing...</p>
-                                    )}
-                                </div>
-                                {error && (
-                                    <div className="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-200 p-4 rounded-xl" role="alert">
-                                        <span className="font-bold">Error:</span> {error}
-                                    </div>
-                                )}
-                                <button
-                                    type="submit"
-                                    disabled={isSlicing || models.length === 0}
-                                    className={`w-full py-3 px-6 rounded-full font-bold text-lg text-gray-100 transition duration-300 ease-in-out transform hover:scale-105 shadow-lg
-                                        ${isSlicing || models.length === 0
-                                            ? 'bg-gray-400 cursor-not-allowed dark:bg-gray-600'
-                                            : 'bg-indigo-600 hover:bg-indigo-700'
-                                        }`}
-                                >
-                                    {isSlicing ? 'Slicing...' : 'Start Slicing'}
-                                </button>
-                            </div>
-                        </form>
-                    </div>}
-            </div>
-        </div>
-    );
-};
-
-export default App;
+export default App

@@ -1,0 +1,25 @@
+import base64
+import struct
+from pathlib import Path
+
+from axiom_slice.thumbnail import extract_gcode_thumbnails, render_stl_thumbnails
+
+
+def binary_triangle(path: Path) -> None:
+    normal_and_vertices = (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0)
+    path.write_bytes(b"Axiom".ljust(80, b"\0") + struct.pack("<I", 1) + struct.pack("<12fH", *normal_and_vertices, 0))
+
+
+def test_render_and_extract_thumbnails(tmp_path: Path) -> None:
+    model = tmp_path / "triangle.stl"
+    binary_triangle(model)
+    rendered = render_stl_thumbnails(model, tmp_path)
+    assert sorted(rendered) == ["thumbnail-300x300.png", "thumbnail-32x32.png", "thumbnail-96x96.png"]
+    payload = rendered["thumbnail-32x32.png"].read_bytes()
+    encoded = base64.b64encode(payload).decode()
+    gcode = tmp_path / "test.gcode"
+    gcode.write_text(f"; thumbnail begin 32x32 {len(encoded)}\n; {encoded}\n; thumbnail end\nG28\n")
+    extracted_dir = tmp_path / "extracted"
+    extracted_dir.mkdir()
+    extracted = extract_gcode_thumbnails(gcode, extracted_dir)
+    assert extracted["thumbnail-32x32.png"].read_bytes() == payload

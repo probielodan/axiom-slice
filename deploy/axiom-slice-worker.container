@@ -1,0 +1,22 @@
+[Unit]
+Description=Axiom Slice isolated OrcaSlicer worker
+After=axiom-slice-api.service
+
+[Container]
+Image=localhost/axiom-slice-worker:1.0.0
+ContainerName=axiom-slice-worker
+EnvironmentFile=%h/.config/axiom-slice/service.env
+Network=none
+Volume=%h/.local/share/axiom-slice:/data
+Volume=%h/.var/app/com.orcaslicer.OrcaSlicer/config/OrcaSlicer:/profiles:ro
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+PodmanArgs=--security-opt label=disable --tmpfs /tmp:rw,noexec,nosuid,size=2g
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=Axiom Slice authenticated API and web UI
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/axiom-slice-api:1.0.0
+ContainerName=axiom-slice-api
+PublishPort=0.0.0.0:5000:5000
+EnvironmentFile=%h/.config/axiom-slice/service.env
+Volume=%h/.local/share/axiom-slice:/data
+Volume=%h/.var/app/com.orcaslicer.OrcaSlicer/config/OrcaSlicer:/profiles:ro
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+PodmanArgs=--security-opt label=disable --tmpfs /tmp:rw,noexec,nosuid,size=256m
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target
