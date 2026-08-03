@@ -71,6 +71,8 @@ def build_command(
         "0",
         "--debug",
         "2",
+        "--logfile",
+        str(job_dir / "orca-native.log"),
         "--datadir",
         str(settings.profile_root),
         "--load-settings",
@@ -161,6 +163,7 @@ def run_job(
     candidates = [
         gcode,
         job_dir / "orca.log",
+        job_dir / "orca-native.log",
         job_dir / "command.txt",
         job_dir / "resolved-profiles.json",
         *thumbnails.values(),
