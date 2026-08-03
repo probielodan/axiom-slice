@@ -47,8 +47,8 @@ def test_worker_pipeline_records_reproducible_artifacts(tmp_path: Path) -> None:
         json.dumps(
             {
                 "machine": {"name": "M"},
-                "process": {"name": "P"},
-                "filament": {"name": "F"},
+                "process": {"name": "P", "compatible_printers": ["Base M"]},
+                "filament": {"name": "F", "compatible_printers": ["Base M"]},
                 "chains": {"machine": ["M"], "process": ["P"], "filament": ["F"]},
             }
         )
@@ -60,4 +60,6 @@ def test_worker_pipeline_records_reproducible_artifacts(tmp_path: Path) -> None:
     assert "thumbnail-300x300.png" in result["artifacts"]
     assert f"--logfile {job_dir / 'orca-native.log'}" in (job_dir / "command.txt").read_text()
     assert json.loads((job_dir / "profiles/process.json").read_text())["wall_loops"] == "4"
+    assert json.loads((job_dir / "profiles/process.json").read_text())["compatible_printers"] == ["M"]
+    assert json.loads((job_dir / "profiles/filament.json").read_text())["compatible_printers"] == ["M"]
     assert any(message == "fake slicing complete" for _, message in events)

@@ -42,6 +42,11 @@ def prepare_profiles(job_dir: Path, resolved: dict[str, Any], request: SliceRequ
     profile_dir = job_dir / "profiles"
     profile_dir.mkdir(parents=True, exist_ok=True)
     profiles = {kind: dict(resolved[kind]) for kind in ("machine", "process", "filament")}
+    machine_name = profiles["machine"].get("name")
+    if machine_name:
+        for kind in ("process", "filament"):
+            if profiles[kind].get("compatible_printers"):
+                profiles[kind]["compatible_printers"] = [machine_name]
     for name, value in request.overrides.items():
         profiles["process"][name] = _orca_value(name, value)
     paths: dict[str, Path] = {}
