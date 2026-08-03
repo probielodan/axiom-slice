@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import selectors
 import shlex
 import subprocess
@@ -22,6 +23,12 @@ class Cancelled(RuntimeError):
     pass
 
 
+PRINT_TIME_RE = re.compile(r"^;\s*estimated printing time \(normal mode\)\s*=\s*(.+?)\s*$", re.MULTILINE)
+PLATE_NAME_FALLBACK_RE = re.compile(
+    r'\{\s*plate_name\s*!=\s*""\s*\?\s*plate_name\s*:\s*input_filename_base\s*\}'
+)
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -36,6 +43,78 @@ def _orca_value(name: str, value: Any) -> Any:
     if name == "sparse_infill_density":
         return f"{value}%"
     return str(value)
+
+
+def _short_print_time(value: str) -> str:
+    match = re.fullmatch(
+        r"\s*(?:(\d+)d\s*)?(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+(?:\.\d+)?)s)?\s*", value
+    )
+    if not match or not any(match.groups()):
+        return re.sub(r"\s+", "", value)
+    days, hours, minutes = (int(part or 0) for part in match.groups()[:3])
+    float_seconds = float(match.group(4) or 0)
+    seconds = int(float_seconds)
+    if days + hours > 0 and seconds >= 30:
+        minutes += 1
+        if minutes == 60:
+            minutes = 0
+            hours += 1
+            if hours == 24:
+                hours = 0
+                days += 1
+    if days:
+        return f"{days}d{hours}h{minutes}m"
+    if hours:
+        return f"{hours}h{minutes}m"
+    if minutes:
+        return f"{minutes}m{seconds}s"
+    if seconds:
+        return f"{seconds}s"
+    if float_seconds:
+        return "<1s"
+    return "0s"
+
+
+def _estimated_print_time(gcode: Path) -> str | None:
+    with gcode.open("rb") as source:
+        source.seek(max(0, gcode.stat().st_size - 2 * 1024 * 1024))
+        tail = source.read().decode("utf-8", errors="replace")
+    match = PRINT_TIME_RE.search(tail)
+    return _short_print_time(match.group(1)) if match else None
+
+
+def _profile_output_name(
+    gcode: Path, inputs: list[Path], resolved: dict[str, Any], log: Callable[[str, str], None]
+) -> str:
+    input_base = inputs[0].stem
+    process = resolved["process"]
+    filament = resolved["filament"].get("filament_type", ["filament"])
+    filament_type = str(filament[0] if isinstance(filament, list) and filament else filament)
+    print_time = _estimated_print_time(gcode)
+    if not print_time:
+        print_time = "unknown-time"
+        log("warning", "Could not read Orca's estimated print time for the output filename")
+    template = str(process.get("filename_format") or "{input_filename_base}.gcode")
+    rendered = PLATE_NAME_FALLBACK_RE.sub(input_base, template)
+    replacements = {
+        "{plate_name}": "",
+        "{input_filename_base}": input_base,
+        "{filament_type[initial_tool]}": filament_type,
+        "{filament_type[0]}": filament_type,
+        "{print_time}": print_time,
+        "{normal_print_time}": print_time,
+    }
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, value)
+    if re.search(r"\{[^{}]+\}", rendered):
+        log("warning", f"Unsupported placeholder in filename format: {template}; using the input filename")
+        rendered = f"{input_base}.gcode"
+    rendered = re.sub(r'[\x00-\x1f/\\]+', "_", rendered).strip(" .")
+    if not rendered:
+        rendered = f"{input_base}.gcode"
+    if not rendered.lower().endswith(".gcode"):
+        rendered += ".gcode"
+    return rendered
 
 
 def prepare_profiles(job_dir: Path, resolved: dict[str, Any], request: SliceRequest) -> dict[str, Path]:
@@ -155,9 +234,10 @@ def run_job(
     if not gcodes:
         raise RuntimeError("OrcaSlicer succeeded but produced no G-code")
     gcode = gcodes[-1]
-    named_gcode = output_dir / f"{request.project_name}.gcode"
+    named_gcode = output_dir / _profile_output_name(gcode, inputs, resolved, log)
     if gcode != named_gcode:
         gcode = gcode.replace(named_gcode)
+    log("info", f"Named G-code from profile format: {gcode.name}")
     thumbnails = extract_gcode_thumbnails(gcode, output_dir)
     if not thumbnails:
         stls = [path for path in inputs if path.suffix.lower() == ".stl"]
