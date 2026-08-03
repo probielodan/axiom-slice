@@ -27,7 +27,7 @@ ARG ORCA_VERSION=2.4.2
 ARG ORCA_SHA256=d12fb8c8eac1aecd2dfb6377acd48f994f8fa439ed5292fa532dd82880f029fd
 ARG ORCA_URL=https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.4.2/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl libasound2t64 libegl1 libgl1 libglu1-mesa libgtk-3-0t64 libgstreamer-plugins-base1.0-0 libjavascriptcoregtk-4.1-0 libwebkit2gtk-4.1-0 \
+    && apt-get install -y --no-install-recommends curl libasound2t64 libegl1 libgl1 libglu1-mesa libgtk-3-0t64 libgstreamer-plugins-base1.0-0 libice6 libjavascriptcoregtk-4.1-0 libmspack0 libsm6 libwebkit2gtk-4.1-0 \
     && curl --fail --location --output /tmp/orca.AppImage "$ORCA_URL" \
     && echo "$ORCA_SHA256  /tmp/orca.AppImage" | sha256sum --check --strict \
     && chmod +x /tmp/orca.AppImage \
