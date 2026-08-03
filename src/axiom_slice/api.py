@@ -68,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolver.refresh()
         return {
             "profiles": resolver.options(),
+            "compatible_profiles": resolver.compatible_options(),
             "defaults": SliceRequest().model_dump(exclude={"overrides", "auto_orient", "export_3mf", "project_name"}),
             "overrides": OVERRIDE_SPECS,
         }

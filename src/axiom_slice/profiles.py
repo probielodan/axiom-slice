@@ -134,3 +134,20 @@ class ProfileResolver:
                 name for name, documents in self.index[kind].items() if any(document.user for document in documents)
             )
         return result
+
+    def compatible_options(self) -> dict[str, dict[str, list[str]]]:
+        options = self.options()
+        result: dict[str, dict[str, list[str]]] = {}
+        for machine_name in options["machine"]:
+            _, machine_chain = self.resolve("machine", machine_name)
+            machine_names = set(machine_chain)
+            result[machine_name] = {}
+            for kind in ("process", "filament"):
+                compatible_names = []
+                for profile_name in options[kind]:
+                    profile, _ = self.resolve(kind, profile_name)
+                    compatible = profile.get("compatible_printers")
+                    if not compatible or machine_names.intersection(compatible):
+                        compatible_names.append(profile_name)
+                result[machine_name][kind] = compatible_names
+        return result

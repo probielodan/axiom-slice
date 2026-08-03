@@ -29,6 +29,7 @@ def test_auth_profile_listing_and_safe_job_upload(tmp_path: Path, profile_root: 
     headers = {"Authorization": "Bearer test-token"}
     profile_response = client.get("/api/v1/profiles", headers=headers)
     assert profile_response.status_code == 200
+    assert profile_response.json()["compatible_profiles"]["Custom K1"]["process"] == ["Custom process"]
     request = {"machine": "Custom K1", "process": "Custom process", "filament": "Custom PETG"}
     response = client.post(
         "/api/v1/jobs",

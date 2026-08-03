@@ -60,7 +60,7 @@ def test_worker_pipeline_records_reproducible_artifacts(tmp_path: Path) -> None:
     events = []
     result = run_job(settings, store, job, lambda level, message: events.append((level, message)))
     assert result["orca"]["version"] == "fake"
-    assert "fake.gcode" in result["artifacts"]
+    assert "axiom-slice.gcode" in result["artifacts"]
     assert "thumbnail-300x300.png" in result["artifacts"]
     assert f"--logfile {job_dir / 'orca-native.log'}" in (job_dir / "command.txt").read_text()
     assert json.loads((job_dir / "profiles/process.json").read_text())["wall_loops"] == "4"

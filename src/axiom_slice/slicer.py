@@ -155,6 +155,9 @@ def run_job(
     if not gcodes:
         raise RuntimeError("OrcaSlicer succeeded but produced no G-code")
     gcode = gcodes[-1]
+    named_gcode = output_dir / f"{request.project_name}.gcode"
+    if gcode != named_gcode:
+        gcode = gcode.replace(named_gcode)
     thumbnails = extract_gcode_thumbnails(gcode, output_dir)
     if not thumbnails:
         stls = [path for path in inputs if path.suffix.lower() == ".stl"]

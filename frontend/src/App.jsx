@@ -15,6 +15,16 @@ function elapsed(job) {
   return start ? `${Math.max(0, (Date.parse(end) - Date.parse(start)) / 1000).toFixed(1)}s` : '—'
 }
 
+function printerLabel(printer) {
+  const state = printer?.print_stats?.state
+  if (!state) return 'Printer online'
+  if (['standby', 'complete', 'cancelled'].includes(state)) return 'Printer ready'
+  if (state === 'printing') return 'Printer printing'
+  if (state === 'paused') return 'Printer paused'
+  if (state === 'error') return 'Printer error'
+  return `Printer ${state}`
+}
+
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('axiom-token') || '')
   const [draftToken, setDraftToken] = useState(token)
@@ -50,21 +60,20 @@ function App() {
     try {
       const data = await (await request('/jobs?limit=40')).json()
       setJobs(data.jobs)
-      if (!selectedId && data.jobs.length) setSelectedId(data.jobs[0].id)
+      setSelectedId((current) => current || data.jobs[0]?.id || null)
     } catch (error) {
       if (String(error).includes('401')) setToken('')
       setNotice(error.message)
     }
-  }, [request, selectedId, token])
+  }, [request, token])
 
   useEffect(() => {
     if (!token) return
     let live = true
-    Promise.all([request('/profiles').then((response) => response.json()), request('/printer/status').then((response) => response.json()).catch(() => null)])
-      .then(([profileData, printerData]) => {
+    request('/profiles').then((response) => response.json())
+      .then((profileData) => {
         if (!live) return
         setProfiles(profileData)
-        setPrinter(printerData?.printer || null)
         setForm((current) => ({ ...current, ...profileData.defaults }))
         const initial = {}
         Object.entries(profileData.overrides).forEach(([name, spec]) => {
@@ -75,6 +84,17 @@ function App() {
       }).catch((error) => { if (live) setNotice(error.message) })
     return () => { live = false }
   }, [loadJobs, request, token])
+
+  useEffect(() => {
+    if (!token) return undefined
+    let live = true
+    const refresh = () => request('/printer/status').then((response) => response.json())
+      .then((data) => { if (live) setPrinter(data.printer || null) })
+      .catch(() => { if (live) setPrinter(null) })
+    refresh()
+    const timer = setInterval(refresh, 5000)
+    return () => { live = false; clearInterval(timer) }
+  }, [request, token])
 
   useEffect(() => {
     if (!token) return undefined
@@ -182,6 +202,22 @@ function App() {
     } catch (error) { setNotice(error.message) }
   }
 
+  const profileOptions = (kind) => kind === 'machine'
+    ? profiles.profiles.machine
+    : profiles.compatible_profiles?.[form.machine]?.[kind] || profiles.profiles[kind]
+
+  const selectProfile = (kind, value) => setForm((current) => {
+    if (kind !== 'machine') return { ...current, [kind]: value }
+    const compatible = profiles.compatible_profiles?.[value]
+    if (!compatible) return { ...current, machine: value }
+    return {
+      ...current,
+      machine: value,
+      process: compatible.process.includes(current.process) ? current.process : compatible.process[0] || '',
+      filament: compatible.filament.includes(current.filament) ? current.filament : compatible.filament[0] || '',
+    }
+  })
+
   if (!token) return <main className="login-shell"><form className="login-card" onSubmit={login}>
     <div className="mark">A</div><p className="eyebrow">Private slicing service</p><h1>Axiom Slice</h1>
     <p>Enter the bearer token stored for this service. It remains in this browser only.</p>
@@ -193,14 +229,14 @@ function App() {
 
   return <main className="app-shell">
     <header><div><p className="eyebrow">OrcaSlicer · Isolated worker</p><h1>Axiom Slice</h1></div>
-      <div className="header-status"><span className={`dot ${printer ? 'online' : ''}`} />{printer ? `Printer ${printer.print_stats?.state || 'online'}` : 'Printer unavailable'}<button className="quiet" onClick={logout}>Lock</button></div></header>
+      <div className="header-status"><span className={`dot ${printer ? 'online' : ''}`} />{printer ? printerLabel(printer) : 'Printer unavailable'}<button className="quiet" onClick={logout}>Lock</button></div></header>
     {notice && <div className="notice" onClick={() => setNotice('')}>{notice}<span>×</span></div>}
     <section className="workspace">
       <form className="panel create" onSubmit={submit}>
         <div className="panel-title"><div><p className="eyebrow">New job</p><h2>Slice a model</h2></div><span className="step">01</span></div>
         <label>Project name<input value={form.project_name} onChange={(event) => setForm({ ...form, project_name: event.target.value })} /></label>
-        <div className="profile-grid">{['machine', 'process', 'filament'].map((kind) => <label key={kind}>{kind}<select value={form[kind]} onChange={(event) => setForm({ ...form, [kind]: event.target.value })}>
-          {profiles.profiles[kind].map((name) => <option key={name}>{name}</option>)}</select></label>)}</div>
+        <div className="profile-grid">{['machine', 'process', 'filament'].map((kind) => <label key={kind}>{kind}<select value={form[kind]} onChange={(event) => selectProfile(kind, event.target.value)}>
+          {profileOptions(kind).map((name) => <option key={name}>{name}</option>)}</select></label>)}</div>
         <button type="button" className="drop" onClick={() => fileRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setFiles([...event.dataTransfer.files]) }}>
           <strong>{files.length ? `${files.length} model${files.length === 1 ? '' : 's'} ready` : 'Drop STL or 3MF here'}</strong>
           <span>{files.length ? files.map((file) => `${file.name} · ${bytes(file.size)}`).join('  •  ') : 'or click to browse'}</span>
@@ -233,8 +269,8 @@ function App() {
       </section>
     </section>
     <section className="history"><div className="history-head"><div><p className="eyebrow">Durable queue</p><h2>Recent jobs</h2></div><button className="quiet" onClick={loadJobs}>Refresh</button></div>
-      <div className="job-list">{jobs.map((job) => <button className={job.id === selectedId ? 'selected' : ''} key={job.id} onClick={() => setSelectedId(job.id)}>
-        <span className={`status-line ${job.status}`} /><strong>{job.request.slice.project_name}</strong><span>{job.request.models.map((model) => model.name).join(', ')}</span><small>{new Date(job.created_at).toLocaleString()}</small><em>{job.status}</em>
+      <div className="job-list">{jobs.map((job) => <button className={`${job.id === selectedId ? 'selected ' : ''}${job.status}`} key={job.id} onClick={() => setSelectedId(job.id)}>
+        <strong>{job.request.slice.project_name}</strong><span>{job.request.models.map((model) => model.name).join(', ')}</span><small>{new Date(job.created_at).toLocaleString()}</small><em>{job.status}</em>
       </button>)}</div></section>
   </main>
 }

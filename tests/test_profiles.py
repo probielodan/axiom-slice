@@ -52,3 +52,11 @@ def test_incompatible_profile_is_rejected(profile_root: Path) -> None:
     path.write_text(json.dumps(data))
     with pytest.raises(ProfileError, match="not compatible"):
         resolver(profile_root).resolve_request(request())
+
+
+def test_compatible_options_are_grouped_by_machine(profile_root: Path) -> None:
+    incompatible = profile_root / "user/default/process/Other process.json"
+    incompatible.write_text(json.dumps({"name": "Other process", "compatible_printers": ["Other machine"]}))
+    options = resolver(profile_root).compatible_options()
+    assert options["Custom K1"]["process"] == ["Custom process"]
+    assert options["Custom K1"]["filament"] == ["Custom PETG"]
