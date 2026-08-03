@@ -1,0 +1,554 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import sys
+import subprocess
+import shutil
+import time
+import json
+import glob
+import re
+from pathlib import Path
+
+# ANSI color codes
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+CYAN = "\033[36m"
+NC = "\033[0m"
+
+
+def output(message, quiet=False, log_file=None):
+    """Prints a message to the console and optionally to a log file."""
+    if not quiet:
+        print(message)
+    if log_file:
+        clean = re.sub(r"\x1B\[[0-9;]*[mGK]", "", message)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(clean + "\n")
+
+
+def output_debug(level, message, debug_level, quiet=False, log_file=None):
+    """Prints a message only if the debug level is high enough."""
+    if debug_level >= level:
+        output(message, quiet, log_file)
+
+
+def find_inherited_profile(profile_type, inherit_name, system_dirs):
+    """Finds an inherited profile file by name in the system directories."""
+    for system_dir in system_dirs:
+        profile_path = system_dir / profile_type
+        for file in profile_path.glob("*.json"):
+            try:
+                with open(file, "r") as f:
+                    data = json.load(f)
+                    if data.get("name") == inherit_name:
+                        return data
+            except Exception:
+                continue
+    return None
+
+
+def flatten_profile(profile, profile_type, system_dirs):
+    """Recursively flattens an OrcaSlicer profile by applying inherited settings."""
+    flattened = dict(profile)
+    seen = set()
+    inherit_name = flattened.get("inherits")
+    while inherit_name and inherit_name not in seen:
+        seen.add(inherit_name)
+        inherited_profile = find_inherited_profile(profile_type, inherit_name, system_dirs)
+        if not inherited_profile:
+            break
+        for key, value in inherited_profile.items():
+            if key not in flattened:
+                flattened[key] = value
+        inherit_name = inherited_profile.get("inherits")
+    return flattened
+
+
+def flatten_configs(orcaslicer_dir, flattened_dir, debug_level, quiet, log_file):
+    """Generates flattened configuration files for all profiles."""
+    output_debug(
+        3, f"{YELLOW}⚙️  Flattening configurations...{NC}", debug_level, quiet, log_file
+    )
+    user_dir = orcaslicer_dir / "user" / "default"
+    system_dirs = list((orcaslicer_dir / "system").glob("*"))
+    for profile_type in ["filament", "machine", "process"]:
+        os.makedirs(flattened_dir / profile_type, exist_ok=True)
+        input_dir = user_dir / profile_type
+        output_dir = flattened_dir / profile_type
+        for file in input_dir.glob("*.json"):
+            try:
+                with open(file, "r") as f:
+                    profile = json.load(f)
+                flattened = flatten_profile(profile, profile_type, system_dirs)
+                output_file = output_dir / file.name
+                with open(output_file, "w") as f:
+                    json.dump(flattened, f, indent=2)
+            except Exception as e:
+                output_debug(
+                    2,
+                    f"{YELLOW}Warning: Error processing {file.name}: {e}{NC}",
+                    debug_level,
+                    quiet,
+                    log_file,
+                )
+
+
+def list_available_configs(machine_dir, process_dir, filament_dir, quiet, log_file):
+    """Lists all available configuration files."""
+    output(f"{BLUE}📦 Available machine configs:{NC}", quiet, log_file)
+    for f in os.listdir(machine_dir):
+        output(f, quiet, log_file)
+    output(f"{BLUE}📦 Available process configs:{NC}", quiet, log_file)
+    for f in os.listdir(process_dir):
+        output(f, quiet, log_file)
+    output(f"{BLUE}📦 Available filament configs:{NC}", quiet, log_file)
+    for f in os.listdir(filament_dir):
+        output(f, quiet, log_file)
+
+
+def upload_to_printer(gcode_files, printer, debug_level, quiet, log_file):
+    """Uploads G-code files to a Moonraker printer."""
+    import requests
+
+    success = True
+    filenames = ""
+    output_debug(
+        3,
+        f"{BLUE}⬆️ Uploading G-code files to {printer}...{NC}",
+        debug_level,
+        quiet,
+        log_file,
+    )
+    for file in gcode_files:
+        output_debug(
+            4, f"{CYAN}  - Uploading file: {file}{NC}", debug_level, quiet, log_file
+        )
+        try:
+            uri = f"http://{printer}/server/files/upload"
+            with open(file, "rb") as f:
+                files = {"file": (os.path.basename(file), f)}
+                requests.post(uri, files=files, timeout=60)
+        except Exception:
+            output(
+                f"{RED}❗ Failed to upload {file} to the printer.{NC}", quiet, log_file
+            )
+            success = False
+            break
+        filename = os.path.basename(file)
+        filenames += filename + ","
+    if success:
+        output(
+            f"{GREEN}✅ All G-code files uploaded successfully.{NC}", quiet, log_file
+        )
+        filenames = filenames.rstrip(",")
+    else:
+        return False, ""
+    return True, filenames
+
+
+def start_print_job(filenames, printer, debug_level, quiet, log_file):
+    """Starts a print job on a Moonraker printer."""
+    import requests
+
+    output_debug(
+        3,
+        f"{BLUE}🖨️ Starting print job for: {filenames}{NC}",
+        debug_level,
+        quiet,
+        log_file,
+    )
+    try:
+        uri = f"http://{printer}/server/job_queue/job?filenames={filenames}"
+        requests.post(uri, timeout=60)
+    except Exception:
+        output(f"{RED}❗ Failed to start the print job.{NC}", quiet, log_file)
+        return False
+    output(f"{GREEN}✅ Print job started successfully.{NC}", quiet, log_file)
+    return True
+
+
+def main():
+    base_dir = os.name == "nt" and Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local" / "orca-slicer")) or Path.home() / ".local" / "share" / "orca-slicer"
+    # Platform-specific OrcaSlicer config dir
+    if os.name == "nt":
+        orcaslicer_dir = (
+            Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+            / "OrcaSlicer"
+        )
+    else:
+        orcaslicer_dir = Path.home() / ".config" / "OrcaSlicer"
+    config_dir = base_dir / "configs"
+    filament_dir = config_dir / "filament"
+    machine_dir = config_dir / "machine"
+    process_dir = config_dir / "process"
+
+    usage = f"""{CYAN}📜 slice.py [OPTIONS] <model.stl|.3mf ...>{NC}
+"""
+    usage_epilogue = f"""
+
+You can override the OrcaSlicer binary by setting the ORCA_BIN environment variable.
+Any additional arguments will be passed directly to OrcaSlicer.
+    Run a successful slice with --export-settings to see a list of available OrcaSlicer options.
+
+Examples:
+    python slice.py model.3mf --export-3mf --export-settings --info
+    python slice.py --no-orient --debug 5 model.stl
+    python slice.py --list-configs
+    python slice.py --project-name myprint --dry-run model.stl
+    python slice.py model.stl --print-results --log-to-file
+    python slice.py model.stl --quiet
+    python slice.py model.stl --printer 192.168.1.10 --print
+"""
+    parser = argparse.ArgumentParser(
+        description="Slice 3D models using OrcaSlicer CLI with custom flattened configs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=usage_epilogue,
+        prog="slice.py",
+        usage=usage,
+    )
+    parser.add_argument("models", nargs="*", help="Model files (.stl/.3mf)")
+    # Config selection
+    parser.add_argument("--filament", default="Creality Generic PETG - Custom.json", help="Use a different filament config (from flattened/filament)")
+    parser.add_argument("--machine", default="Creality K1 (0.4 nozzle) - Custom.json", help="Use a different machine config (from flattened/machine)")
+    parser.add_argument("--process", default="0.16mm Optimal @Creality K1 (0.4 nozzle) - Custom.json", help="Use a different process config (from flattened/process)")
+    # Slicing options
+    parser.add_argument("--auto-orient", action="store_true", help="Enable auto-orient")
+    parser.add_argument("--info", action="store_true", help="Print model information")
+    parser.add_argument("--dry-run", action="store_true", help="Print the OrcaSlicer command but don't run it")
+    parser.add_argument("--export-3mf", action="store_true", help="Export project as 3MF (implies --keep-project)")
+    parser.add_argument("--export-settings", action="store_true", help="Export settings to a file (implies --keep-project)")
+    parser.add_argument("--project-name", default="project", help="Set the base name for the output project")
+    # Output and logging
+    parser.add_argument("--output-dir", default=(base_dir / "projects"), help=f"Set a custom output directory")
+    parser.add_argument("--keep-project", action="store_true", help="Keep the project directory after slicing")
+    parser.add_argument("--keep-result", action="store_true", help="Keep the result.json file (implies --keep-project)")
+    parser.add_argument("--print-results", action="store_true", help="Output slicing results summary from result.json")
+    parser.add_argument("--show-output", action="store_true", help="Show the raw OrcaSlicer output in the console")
+    parser.add_argument("--log-to-file", action="store_true", help="Log all script and OrcaSlicer output to a file (implies --keep-project)")
+    parser.add_argument("--quiet", action="store_true", help="Suppress all non-essential script output")
+    # Config management
+    parser.add_argument("--flatten", action="store_true", help="Generate flattened OrcaSlicer config files and exit")
+    parser.add_argument("--list-configs", action="store_true", help="Generate flattened configs and list available options")
+    # Printer
+    parser.add_argument("--printer", help="Upload gcode to a Moonraker printer (e.g., 192.168.1.10)")
+    parser.add_argument("--print", dest="start_print", action="store_true", help="Start a print job after uploading to the printer (requires --printer)")
+    # Debug/advanced
+    parser.add_argument("--debug", type=int, default=0, help="Set debug level 0:fatal, 1:error, 2:warning, 3:info, 4:debug, 5:trace")
+    parser.add_argument("--orca-bin", default=None, help="Override the OrcaSlicer binary path")
+    args, unknown_args = parser.parse_known_args()
+
+    # Early exit for flatten/list-configs
+    if args.list_configs or args.flatten:
+        flatten_configs(orcaslicer_dir, config_dir, args.debug, args.quiet, None)
+        if args.list_configs:
+            list_available_configs(
+                machine_dir, process_dir, filament_dir, args.quiet, None
+            )
+        sys.exit(0)
+
+    if not args.models:
+        output(f"{RED}❗ Error: No model file(s) provided.{NC}", args.quiet)
+        parser.print_help()
+        sys.exit(1)
+
+    if args.start_print and not args.printer:
+        output(
+            f"{RED}❗ Error: --printer is required when using --print.{NC}", args.quiet
+        )
+        parser.print_help()
+        sys.exit(1)
+
+    if args.printer and re.match(r"^[a-zA-Z0-9\.-]+:[0-9]+$", args.printer):
+        output(
+            f"{RED}❗ Error: Printer address should not contain a port number.{NC}",
+            args.quiet,
+        )
+        parser.print_help()
+        sys.exit(1)
+
+    project_name = args.project_name
+    if project_name == "project":
+        project_name = Path(args.models[0]).stem
+        if len(args.models) > 1:
+            project_name += "_combined"
+    project_dir = Path(args.output_dir) / f"{project_name}_{time.strftime('%Y-%m-%d_%H-%M-%S')}"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    log_file = None
+    if args.log_to_file:
+        log_file = str(project_dir / f"{project_name}.log")
+        output(
+            f"{CYAN}📝 Output will also be logged to: {log_file}{NC}",
+            args.quiet,
+            log_file,
+        )
+    else:
+        import signal
+
+        def cleanup(*_):
+            output(f"{YELLOW}💥 Interrupted. Cleaning up.{NC}", args.quiet, log_file)
+            shutil.rmtree(project_dir, ignore_errors=True)
+            sys.exit(1)
+
+        signal.signal(signal.SIGINT, cleanup)
+        signal.signal(signal.SIGTERM, cleanup)
+
+    if not orcaslicer_dir.is_dir():
+        output(
+            f"{RED}❗ OrcaSlicer directory not found: {orcaslicer_dir}{NC}",
+            args.quiet,
+            log_file,
+        )
+        output(
+            f"{YELLOW}⚠️ Please ensure OrcaSlicer is installed and the directory exists.{NC}",
+            args.quiet,
+            log_file,
+        )
+        sys.exit(1)
+
+    if not args.quiet:
+        flatten_configs(orcaslicer_dir, config_dir, args.debug, args.quiet, log_file)
+
+    if not (filament_dir / args.filament).is_file():
+        output(f"{RED}❗ Filament config not found: {args.filament}{NC}", args.quiet, log_file)
+        if not args.quiet:
+            list_available_configs(machine_dir, process_dir, filament_dir, args.quiet, log_file)
+        sys.exit(1)
+    if not (machine_dir / args.machine).is_file():
+        output(f"{RED}❗ Machine config not found: {args.machine}{NC}", args.quiet, log_file)
+        if not args.quiet:
+            list_available_configs(machine_dir, process_dir, filament_dir, args.quiet, log_file)
+        sys.exit(1)
+    if not (process_dir / args.process).is_file():
+        output(f"{RED}❗ Process config not found: {args.process}{NC}", args.quiet, log_file)
+        if not args.quiet:
+            list_available_configs(machine_dir, process_dir, filament_dir, args.quiet, log_file)
+        sys.exit(1)
+
+    if args.orca_bin:
+        orca_bin = args.orca_bin
+    elif os.environ.get("ORCA_BIN"):
+        orca_bin = os.environ["ORCA_BIN"]
+    elif os.name == "nt":
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        possible_bins = [
+            os.path.join(pf, "OrcaSlicer", "orca-slicer.exe"),
+            os.path.join(pf86, "OrcaSlicer", "orca-slicer.exe"),
+            "orca-slicer.exe",
+        ]
+        for bin_path in possible_bins:
+            if os.path.isfile(bin_path):
+                orca_bin = bin_path
+                break
+        else:
+            orca_bin = "orca-slicer.exe"  # fallback, must be in PATH
+    else:
+        orca_bin = str(Path("orca-slicer"))
+
+    cmd = [orca_bin, "--allow-newer-file", "--allow-rotations"]
+    if args.auto_orient:
+        cmd += ["--orient", "1"]
+    cmd += [
+        "--arrange",
+        "1",
+        "--ensure-on-bed",
+        "--datadir",
+        str(orcaslicer_dir),
+        "--load-settings",
+        f"{machine_dir / args.machine};{process_dir / args.process}",
+        "--load-filaments",
+        str(filament_dir / args.filament),
+        "--outputdir",
+        str(project_dir),
+    ]
+    if args.export_3mf:
+        export_3mf_filename = f"{project_name}.3mf"
+        cmd += ["--export-3mf", export_3mf_filename]
+    if args.export_settings:
+        export_settings_path = project_dir / "settings.json"
+        cmd += ["--export-settings", str(export_settings_path)]
+    if args.info:
+        cmd += ["--info"]
+    cmd += ["--slice", "0", "--debug", str(args.debug)]
+    cmd += args.models
+    cmd += unknown_args
+
+    output_debug(
+        4, f"{BLUE}💡 OrcaSlicer command:{NC}", args.debug, args.quiet, log_file
+    )
+    output_debug(4, " ".join(cmd), args.debug, args.quiet, log_file)
+
+    if args.dry_run:
+        output(f"{CYAN}🧪 Dry run: command not executed.{NC}", args.quiet, log_file)
+        sys.exit(0)
+
+    if not args.quiet and not args.show_output:
+        output(f"{YELLOW}⏳ Slicing...{NC}", args.quiet, log_file)
+
+    status = 1
+    try:
+        # Use Popen and read output line by line for cross-platform consistency
+        with subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8'
+        ) as process:
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                # Only print to console if --show-output is enabled
+                if args.show_output:
+                    print(line.strip())
+                # Always log to file if --log-to-file is enabled
+                if log_file:
+                    with open(log_file, "a", encoding="utf-8") as lf:
+                        lf.write(line)
+
+            process.wait()
+            status = process.returncode
+
+    except FileNotFoundError:
+        output(f"{RED}❗ OrcaSlicer binary not found. Please check your path or specify it with --orca-bin.{NC}", args.quiet, log_file)
+        sys.exit(1)
+    except Exception as e:
+        output(f"{RED}❗ Failed to run OrcaSlicer: {e}{NC}", args.quiet, log_file)
+        status = 1
+
+    if (status != 0):
+        output(
+            f"{RED}❗ OrcaSlicer failed to slice the model(s).{NC}",
+            args.quiet,
+            log_file,
+        )
+        result_path = project_dir / "result.json"
+        if result_path.is_file():
+            with open(result_path, "r", encoding="utf-8") as f:
+                try:
+                    result_json = json.load(f)
+                    error_string = result_json.get("error_string")
+                    output(
+                        f"{RED}❗ Error from OrcaSlicer: {error_string}{NC}",
+                        args.quiet,
+                        log_file,
+                    )
+                except Exception:
+                    pass
+        sys.exit(1)
+
+    output(f"{GREEN}✅ Slicing completed successfully.{NC}", args.quiet, log_file)
+
+    if args.print_results:
+        output(f"{BLUE}📊 Slicing Results:{NC}", args.quiet, log_file)
+        result_path = project_dir / "result.json"
+        if result_path.is_file():
+            with open(result_path, "r", encoding="utf-8") as f:
+                try:
+                    result_json = json.load(f)
+                    for plate_info in result_json.get("sliced_plates", []):
+                        if plate_info.get("warning_message"):
+                            output(
+                                f"{YELLOW}⚠️ --- Plate {plate_info.get('id')} Warning ---{NC}",
+                                args.quiet,
+                                log_file,
+                            )
+                            output(
+                                f"{YELLOW}{plate_info.get('warning_message')}{NC}",
+                                args.quiet,
+                                log_file,
+                            )
+                    error_string = result_json.get("error_string")
+                    if error_string != "Success.":
+                        output(
+                            f"{RED}❗ Overall Error: {error_string}{NC}",
+                            args.quiet,
+                            log_file,
+                        )
+                except Exception:
+                    output(
+                        f"{YELLOW}⚠️ Warning: result.json not found or unreadable.{NC}",
+                        args.quiet,
+                        log_file,
+                    )
+        else:
+            output(
+                f"{YELLOW}⚠️ Warning: result.json not found.{NC}", args.quiet, log_file
+            )
+
+    # Rename gcode files
+    gcode_files = list(project_dir.glob("*.gcode"))
+    gcode_count = len(gcode_files)
+    for gcode_file in gcode_files:
+        m = re.search(r"plate_(\d+)\.gcode", gcode_file.name)
+        if m:
+            plate_number = m.group(1)
+            if gcode_count > 1:
+                new_name = project_dir / f"{project_name}_plate_{plate_number}.gcode"
+            else:
+                new_name = project_dir / f"{project_name}.gcode"
+            output_debug(
+                3,
+                f"{YELLOW}🔄 Renaming: {gcode_file} → {new_name}{NC}",
+                args.debug,
+                args.quiet,
+                log_file,
+            )
+            gcode_file.rename(new_name)
+
+    # Upload to printer
+    if args.printer:
+        renamed_gcode_files = list(project_dir.glob("*.gcode"))
+        success, filenames = upload_to_printer(
+            [str(f) for f in renamed_gcode_files],
+            args.printer,
+            args.debug,
+            args.quiet,
+            log_file,
+        )
+        if success and args.start_print:
+            start_print_job(filenames, args.printer, args.debug, args.quiet, log_file)
+
+    # Remove result.json if not keeping
+    if not args.keep_result:
+        output_debug(
+            3, f"{YELLOW}🗑️  Removing result.json{NC}", args.debug, args.quiet, log_file
+        )
+        try:
+            os.remove(project_dir / "result.json")
+        except Exception:
+            pass
+
+    # Remove or keep project dir
+    if (
+        args.keep_project
+        or args.export_3mf
+        or args.export_settings
+        or args.log_to_file
+        or args.keep_result
+    ):
+        output_debug(
+            3,
+            f"{YELLOW}📁 Project directory: {project_dir}{NC}",
+            args.debug,
+            args.quiet,
+            log_file,
+        )
+    else:
+        shutil.rmtree(project_dir, ignore_errors=True)
+        output_debug(
+            3,
+            f"{YELLOW}🧹 Project directory removed.{NC}",
+            args.debug,
+            args.quiet,
+            log_file,
+        )
+
+
+if __name__ == "__main__":
+    main()
