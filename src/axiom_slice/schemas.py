@@ -7,6 +7,48 @@ from pydantic import BaseModel, Field, field_validator
 
 PROJECT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
+BedTypeName = Literal[
+    "smooth-high-temp",
+    "textured-pei",
+    "smooth-cool",
+    "textured-cool",
+    "engineering",
+    "supertack",
+]
+
+BED_TYPES: dict[str, dict[str, str]] = {
+    "smooth-high-temp": {
+        "label": "Smooth High Temp Plate",
+        "orca": "High Temp Plate",
+        "temperature_key": "hot_plate_temp_initial_layer",
+    },
+    "textured-pei": {
+        "label": "Textured PEI Plate",
+        "orca": "Textured PEI Plate",
+        "temperature_key": "textured_plate_temp_initial_layer",
+    },
+    "smooth-cool": {
+        "label": "Smooth Cool Plate",
+        "orca": "Cool Plate",
+        "temperature_key": "cool_plate_temp_initial_layer",
+    },
+    "textured-cool": {
+        "label": "Textured Cool Plate",
+        "orca": "Textured Cool Plate",
+        "temperature_key": "textured_cool_plate_temp_initial_layer",
+    },
+    "engineering": {
+        "label": "Engineering Plate",
+        "orca": "Engineering Plate",
+        "temperature_key": "eng_plate_temp_initial_layer",
+    },
+    "supertack": {
+        "label": "Cool Plate (SuperTack)",
+        "orca": "Supertack Plate",
+        "temperature_key": "supertack_plate_temp_initial_layer",
+    },
+}
+
 
 OVERRIDE_SPECS: dict[str, dict[str, Any]] = {
     "wall_loops": {"type": "integer", "minimum": 0, "maximum": 100, "label": "Wall loops"},
@@ -77,6 +119,7 @@ class SliceRequest(BaseModel):
     machine: str = "Creality K1 (0.4 nozzle) - Custom"
     process: str = "0.16mm Optimal @Creality K1 (0.4 nozzle) - Custom"
     filament: str = "Sunlu PETG"
+    bed_type: BedTypeName = "smooth-high-temp"
     auto_orient: bool = True
     export_3mf: bool = False
     overrides: dict[str, Any] = Field(default_factory=dict)

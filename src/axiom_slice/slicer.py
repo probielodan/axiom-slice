@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .schemas import SliceRequest
+from .schemas import BED_TYPES, SliceRequest
 from .store import JobStore
 from .thumbnail import extract_gcode_thumbnails, render_stl_thumbnails
 
@@ -24,6 +24,8 @@ class Cancelled(RuntimeError):
 
 
 PRINT_TIME_RE = re.compile(r"^;\s*estimated printing time \(normal mode\)\s*=\s*(.+?)\s*$", re.MULTILINE)
+BED_TYPE_RE = re.compile(r"^;\s*curr_bed_type\s*=\s*(.+?)\s*$", re.MULTILINE)
+BED_TEMPERATURE_RE = re.compile(r"^;\s*first_layer_bed_temperature\s*=\s*([0-9.]+)\s*$", re.MULTILINE)
 PLATE_NAME_FALLBACK_RE = re.compile(
     r'\{\s*plate_name\s*!=\s*""\s*\?\s*plate_name\s*:\s*input_filename_base\s*\}'
 )
@@ -75,12 +77,44 @@ def _short_print_time(value: str) -> str:
     return "0s"
 
 
-def _estimated_print_time(gcode: Path) -> str | None:
+def _gcode_tail(gcode: Path) -> str:
     with gcode.open("rb") as source:
         source.seek(max(0, gcode.stat().st_size - 2 * 1024 * 1024))
-        tail = source.read().decode("utf-8", errors="replace")
-    match = PRINT_TIME_RE.search(tail)
+        return source.read().decode("utf-8", errors="replace")
+
+
+def _estimated_print_time(gcode: Path) -> str | None:
+    match = PRINT_TIME_RE.search(_gcode_tail(gcode))
     return _short_print_time(match.group(1)) if match else None
+
+
+def _expected_bed_temperature(resolved: dict[str, Any], request: SliceRequest) -> int:
+    bed = BED_TYPES[request.bed_type]
+    value = resolved["filament"].get(bed["temperature_key"])
+    if isinstance(value, list):
+        value = value[0] if value else None
+    try:
+        temperature = int(float(value))
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"{request.filament} has no valid first-layer temperature for {bed['label']}"
+        ) from error
+    if temperature <= 0:
+        raise RuntimeError(f"{request.filament} does not support {bed['label']}")
+    return temperature
+
+
+def _verify_bed_selection(gcode: Path, request: SliceRequest, expected_temperature: int) -> None:
+    bed = BED_TYPES[request.bed_type]
+    tail = _gcode_tail(gcode)
+    actual_type = BED_TYPE_RE.search(tail)
+    actual_temperature = BED_TEMPERATURE_RE.search(tail)
+    if not actual_type or actual_type.group(1) != bed["orca"]:
+        found = actual_type.group(1) if actual_type else "missing"
+        raise RuntimeError(f"Orca selected {found!r} instead of {bed['orca']!r}")
+    if not actual_temperature or float(actual_temperature.group(1)) != expected_temperature:
+        found = actual_temperature.group(1) if actual_temperature else "missing"
+        raise RuntimeError(f"Orca generated bed temperature {found!r}; expected {expected_temperature} °C")
 
 
 def _profile_output_name(
@@ -152,6 +186,8 @@ def build_command(
         "--ensure-on-bed",
         "--slice",
         "0",
+        "--curr-bed-type",
+        BED_TYPES[request.bed_type]["orca"],
         "--debug",
         "2",
         "--logfile",
@@ -177,6 +213,9 @@ def run_job(
     job_dir = settings.jobs_dir / job_id
     request = SliceRequest.model_validate(job["request"]["slice"])
     resolved = json.loads((job_dir / "resolved-profiles.json").read_text(encoding="utf-8"))
+    expected_bed_temperature = _expected_bed_temperature(resolved, request)
+    bed = BED_TYPES[request.bed_type]
+    log("info", f"Build plate: {bed['label']}; profile target: {expected_bed_temperature} °C")
     inputs = sorted((job_dir / "input").iterdir())
     profiles = prepare_profiles(job_dir, resolved, request)
     command = build_command(settings, job_dir, request, inputs, profiles)
@@ -234,6 +273,8 @@ def run_job(
     if not gcodes:
         raise RuntimeError("OrcaSlicer succeeded but produced no G-code")
     gcode = gcodes[-1]
+    _verify_bed_selection(gcode, request, expected_bed_temperature)
+    log("info", f"Verified {bed['label']} at {expected_bed_temperature} °C")
     named_gcode = output_dir / _profile_output_name(gcode, inputs, resolved, log)
     if gcode != named_gcode:
         gcode = gcode.replace(named_gcode)

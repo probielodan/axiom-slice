@@ -8,6 +8,7 @@ Axiom Slice turns the Fedora workstation's curated Creality K1 OrcaSlicer profil
 - Profiles are inherited and flattened in memory for each job. Source Orca profiles are mounted read-only and never rewritten.
 - The persistent worker slices one job at a time with no network and stores reproducible artifacts in a durable SQLite-backed queue.
 - Every job retains its inputs, request, resolved profiles, inheritance chains, command, Orca log, checksums, G-code, thumbnails, and optional 3MF.
+- Build-plate selection uses Orca's `--curr-bed-type`; each filament profile remains authoritative for that plate's temperatures, and the worker verifies the generated G-code.
 - The API can upload successful G-code to the configured Moonraker printer. The web UI can start a print only after an explicit confirmation.
 - The agent CLI intentionally supports upload but has no print command. Printer motion and print authorization remain separate concerns.
 
@@ -63,5 +64,11 @@ Replace the example token before starting the services. Browse to `http://fedora
 ## Client
 
 `axiom-slice` reads `AXIOM_SLICE_URL` and `AXIOM_SLICE_TOKEN` from the environment or `~/.config/axiom-slice/client.env`. It supports profiles, submit, jobs, status, wait, cancel, download, and upload. It deliberately does not expose print start.
+
+Select one of the plate values returned by `axiom-slice profiles`, for example:
+
+```sh
+axiom-slice submit model.stl --bed-type textured-pei
+```
 
 Old terminal jobs are retained until a local administrator deliberately runs `axiom-slice-prune --older-than-days 30 --apply`; without `--apply`, it is a dry run.

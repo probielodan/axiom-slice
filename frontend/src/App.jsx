@@ -38,7 +38,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [printer, setPrinter] = useState(null)
-  const [form, setForm] = useState({ project_name: 'axiom-slice', machine: '', process: '', filament: '', auto_orient: true, export_3mf: false })
+  const [form, setForm] = useState({ project_name: 'axiom-slice', machine: '', process: '', filament: '', bed_type: 'smooth-high-temp', auto_orient: true, export_3mf: false })
   const [overrides, setOverrides] = useState({})
   const [enabledOverrides, setEnabledOverrides] = useState({})
   const fileRef = useRef(null)
@@ -206,6 +206,8 @@ function App() {
     ? profiles.profiles.machine
     : profiles.compatible_profiles?.[form.machine]?.[kind] || profiles.profiles[kind]
 
+  const bedLabel = (value) => profiles.bed_types.find((bed) => bed.value === value)?.label || value || 'Legacy default'
+
   const selectProfile = (kind, value) => setForm((current) => {
     if (kind !== 'machine') return { ...current, [kind]: value }
     const compatible = profiles.compatible_profiles?.[value]
@@ -236,7 +238,9 @@ function App() {
         <div className="panel-title"><div><p className="eyebrow">New job</p><h2>Slice a model</h2></div><span className="step">01</span></div>
         <label>Project name<input value={form.project_name} onChange={(event) => setForm({ ...form, project_name: event.target.value })} /></label>
         <div className="profile-grid">{['machine', 'process', 'filament'].map((kind) => <label key={kind}>{kind}<select value={form[kind]} onChange={(event) => selectProfile(kind, event.target.value)}>
-          {profileOptions(kind).map((name) => <option key={name}>{name}</option>)}</select></label>)}</div>
+          {profileOptions(kind).map((name) => <option key={name}>{name}</option>)}</select></label>)}
+          <label>Build plate<select value={form.bed_type} onChange={(event) => setForm({ ...form, bed_type: event.target.value })}>
+            {profiles.bed_types.map((bed) => <option value={bed.value} key={bed.value}>{bed.label}</option>)}</select></label></div>
         <button type="button" className="drop" onClick={() => fileRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setFiles([...event.dataTransfer.files]) }}>
           <strong>{files.length ? `${files.length} model${files.length === 1 ? '' : 's'} ready` : 'Drop STL or 3MF here'}</strong>
           <span>{files.length ? files.map((file) => `${file.name} · ${bytes(file.size)}`).join('  •  ') : 'or click to browse'}</span>
@@ -258,7 +262,7 @@ function App() {
         <div className="panel-title"><div><p className="eyebrow">Selected job</p><h2>{selected?.request?.slice?.project_name || 'No job selected'}</h2></div><span className={`badge ${selected?.status || ''}`}>{selected?.status || '—'}</span></div>
         {!selected ? <div className="empty">Submit a model to begin.</div> : <>
           <div className="preview"><div className="preview-image">{preview ? <img src={preview} alt="Sliced model thumbnail" /> : <span>No thumbnail yet</span>}</div>
-            <dl><div><dt>Job</dt><dd>{selected.id.slice(0, 12)}</dd></div><div><dt>Elapsed</dt><dd>{elapsed(selected)}</dd></div><div><dt>Models</dt><dd>{selected.request.models.length}</dd></div><div><dt>Artifacts</dt><dd>{Object.keys(selected.artifacts || {}).length}</dd></div></dl></div>
+            <dl><div><dt>Job</dt><dd>{selected.id.slice(0, 12)}</dd></div><div><dt>Elapsed</dt><dd>{elapsed(selected)}</dd></div><div><dt>Models</dt><dd>{selected.request.models.length}</dd></div><div><dt>Plate</dt><dd>{bedLabel(selected.request.slice.bed_type)}</dd></div><div><dt>Artifacts</dt><dd>{Object.keys(selected.artifacts || {}).length}</dd></div></dl></div>
           {selected.error && <p className="error-block">{selected.error}</p>}
           <div className="actions"><button disabled={busy || selected.status !== 'succeeded'} onClick={() => action(`/jobs/${selected.id}/printer/upload`)}>Upload to K1</button>
             <button className="danger" disabled={busy || !selected.result?.printer_file} onClick={() => action(`/jobs/${selected.id}/printer/print`, `Start printing ${selected.result?.printer_file}?\n\nVerify the bed is clear before continuing.`)}>Start print…</button>

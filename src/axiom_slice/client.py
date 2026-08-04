@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .schemas import BED_TYPES
+
 DEFAULT_CONFIG = Path("~/.config/axiom-slice/client.env").expanduser()
 
 
@@ -96,6 +98,7 @@ def parser() -> argparse.ArgumentParser:
     submit.add_argument("--machine", default="Creality K1 (0.4 nozzle) - Custom")
     submit.add_argument("--process", default="0.16mm Optimal @Creality K1 (0.4 nozzle) - Custom")
     submit.add_argument("--filament", default="Sunlu PETG")
+    submit.add_argument("--bed-type", choices=BED_TYPES, default="smooth-high-temp")
     submit.add_argument("--no-auto-orient", action="store_true")
     submit.add_argument("--export-3mf", action="store_true")
     submit.add_argument("--set", action="append", default=[], metavar="NAME=JSON_VALUE")
@@ -142,6 +145,7 @@ def main() -> None:
             "machine": args.machine,
             "process": args.process,
             "filament": args.filament,
+            "bed_type": args.bed_type,
             "auto_orient": not args.no_auto_orient,
             "export_3mf": args.export_3mf,
             "overrides": overrides,

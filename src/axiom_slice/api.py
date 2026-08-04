@@ -17,7 +17,7 @@ from . import __version__
 from .config import Settings
 from .printer import MoonrakerPrinter
 from .profiles import ProfileError, ProfileResolver
-from .schemas import OVERRIDE_SPECS, PrintRequest, SliceRequest
+from .schemas import BED_TYPES, OVERRIDE_SPECS, PrintRequest, SliceRequest
 from .store import TERMINAL_STATES, JobStore
 
 ALLOWED_SUFFIXES = {".stl", ".3mf"}
@@ -69,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "profiles": resolver.options(),
             "compatible_profiles": resolver.compatible_options(),
+            "bed_types": [{"value": value, "label": details["label"]} for value, details in BED_TYPES.items()],
             "defaults": SliceRequest().model_dump(exclude={"overrides", "auto_orient", "export_3mf", "project_name"}),
             "overrides": OVERRIDE_SPECS,
         }
