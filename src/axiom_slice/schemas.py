@@ -50,6 +50,9 @@ BED_TYPES: dict[str, dict[str, str]] = {
 }
 
 
+SUPPORT_STYLES = {"organic": "tree(auto)", "snug": "normal(auto)"}
+
+
 OVERRIDE_SPECS: dict[str, dict[str, Any]] = {
     "wall_loops": {"type": "integer", "minimum": 0, "maximum": 100, "label": "Wall loops"},
     "sparse_infill_density": {"type": "number", "minimum": 0, "maximum": 100, "label": "Infill density (%)"},
@@ -66,16 +69,12 @@ OVERRIDE_SPECS: dict[str, dict[str, Any]] = {
         "label": "Vertical shell thickness",
     },
     "enable_support": {"type": "boolean", "label": "Enable supports"},
-    "support_type": {
-        "type": "enum",
-        "values": ["normal(auto)", "tree(auto)", "normal(manual)", "tree(manual)"],
-        "label": "Support type",
-    },
     "support_on_build_plate_only": {"type": "boolean", "label": "Build-plate supports only"},
     "support_style": {
         "type": "enum",
-        "values": ["default", "snug", "tree_slim", "tree_strong", "tree_hybrid", "organic"],
-        "label": "Support style",
+        "values": list(SUPPORT_STYLES),
+        "value_labels": {"organic": "Organic", "snug": "Snug"},
+        "label": "Support type",
     },
     "support_threshold_angle": {"type": "number", "minimum": 0, "maximum": 90, "label": "Support threshold angle"},
     "tree_support_wall_count": {"type": "integer", "minimum": 0, "maximum": 2, "label": "Tree support walls"},

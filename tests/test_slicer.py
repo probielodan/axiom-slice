@@ -4,7 +4,7 @@ from pathlib import Path
 
 from axiom_slice.config import Settings
 from axiom_slice.schemas import SliceRequest
-from axiom_slice.slicer import _add_fallback_thumbnails, _short_print_time, run_job
+from axiom_slice.slicer import _add_fallback_thumbnails, _short_print_time, prepare_profiles, run_job
 from axiom_slice.store import JobStore
 
 
@@ -117,3 +117,23 @@ def test_multi_model_job_does_not_show_single_model_fallback(tmp_path: Path) -> 
         )
     ]
     assert gcode.read_text() == "G28\n"
+
+
+def test_support_style_controls_orca_support_type_and_rejects_profile_drift(tmp_path: Path) -> None:
+    resolved = {
+        "machine": {"name": "M"},
+        "process": {"name": "P", "support_style": "tree_strong", "support_type": "tree(auto)"},
+        "filament": {"name": "F"},
+        "chains": {"machine": ["M"], "process": ["P"], "filament": ["F"]},
+    }
+    snug = prepare_profiles(tmp_path / "snug", resolved, SliceRequest())
+    snug_process = json.loads(snug["process"].read_text())
+    assert snug_process["support_style"] == "snug"
+    assert snug_process["support_type"] == "normal(auto)"
+
+    organic = prepare_profiles(
+        tmp_path / "organic", resolved, SliceRequest(overrides={"support_style": "organic"})
+    )
+    organic_process = json.loads(organic["process"].read_text())
+    assert organic_process["support_style"] == "organic"
+    assert organic_process["support_type"] == "tree(auto)"

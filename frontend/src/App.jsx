@@ -252,7 +252,7 @@ function App() {
           <div className="override-grid">{Object.entries(profiles.overrides).map(([name, spec]) => <div className={`override ${enabledOverrides[name] ? 'active' : ''}`} key={name}>
             <label className="enable"><input type="checkbox" checked={!!enabledOverrides[name]} onChange={(event) => setEnabledOverrides({ ...enabledOverrides, [name]: event.target.checked })} />{spec.label}</label>
             {spec.type === 'boolean' ? <select disabled={!enabledOverrides[name]} value={String(overrides[name])} onChange={(event) => setOverrides({ ...overrides, [name]: event.target.value === 'true' })}><option value="false">No</option><option value="true">Yes</option></select>
-              : spec.type === 'enum' ? <select disabled={!enabledOverrides[name]} value={overrides[name]} onChange={(event) => setOverrides({ ...overrides, [name]: event.target.value })}>{spec.values.map((value) => <option key={value}>{value}</option>)}</select>
+              : spec.type === 'enum' ? <select disabled={!enabledOverrides[name]} value={overrides[name]} onChange={(event) => setOverrides({ ...overrides, [name]: event.target.value })}>{spec.values.map((value) => <option key={value} value={value}>{spec.value_labels?.[value] || value}</option>)}</select>
                 : <input disabled={!enabledOverrides[name]} type="number" min={spec.minimum} max={spec.maximum} step={spec.type === 'integer' ? 1 : 0.1} value={overrides[name]} onChange={(event) => setOverrides({ ...overrides, [name]: spec.type === 'integer' ? Number.parseInt(event.target.value) : Number.parseFloat(event.target.value) })} />}
           </div>)}</div></details>
         <button className="primary" disabled={busy || !files.length}>{busy ? 'Working…' : 'Queue slice'}</button>

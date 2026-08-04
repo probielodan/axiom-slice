@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .schemas import BED_TYPES
+from .schemas import BED_TYPES, validate_overrides
 
 DEFAULT_CONFIG = Path("~/.config/axiom-slice/client.env").expanduser()
 
@@ -140,6 +140,10 @@ def main() -> None:
                 overrides[name] = json.loads(raw)
             except json.JSONDecodeError as error:
                 raise SystemExit(f"Invalid JSON value for {name}: {error}") from error
+        try:
+            overrides = validate_overrides(overrides)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
         payload = {
             "project_name": args.name,
             "machine": args.machine,

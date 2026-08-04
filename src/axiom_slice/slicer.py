@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .schemas import BED_TYPES, SliceRequest
+from .schemas import BED_TYPES, SUPPORT_STYLES, SliceRequest
 from .store import JobStore
 from .thumbnail import embed_gcode_thumbnails, extract_gcode_thumbnails, render_stl_thumbnails
 
@@ -186,6 +186,11 @@ def prepare_profiles(job_dir: Path, resolved: dict[str, Any], request: SliceRequ
             profile["inherits"] = chain[1]
     for name, value in request.overrides.items():
         profiles["process"][name] = _orca_value(name, value)
+    support_style = profiles["process"].get("support_style", "snug")
+    if support_style not in SUPPORT_STYLES:
+        support_style = "snug"
+    profiles["process"]["support_style"] = support_style
+    profiles["process"]["support_type"] = SUPPORT_STYLES[support_style]
     paths: dict[str, Path] = {}
     for kind, profile in profiles.items():
         path = profile_dir / f"{kind}.json"

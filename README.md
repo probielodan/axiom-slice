@@ -9,6 +9,7 @@ Axiom Slice turns the Fedora workstation's curated Creality K1 OrcaSlicer profil
 - The persistent worker slices one job at a time with no network and stores reproducible artifacts in a durable SQLite-backed queue.
 - Every job retains its inputs, request, resolved profiles, inheritance chains, command, Orca log, checksums, G-code, thumbnails, and optional 3MF.
 - Native G-code thumbnails are preferred. The STL fallback is limited to single-model jobs; multi-model jobs omit it rather than presenting one model as the whole plate. Export and inspect the 3MF when exact multi-model layout matters.
+- Support selection is intentionally limited to Organic and Snug. Axiom derives Orca's underlying normal/tree mode and normalizes unsupported profile defaults to Snug.
 - Build-plate selection uses Orca's `--curr-bed-type`; each filament profile remains authoritative for that plate's temperatures, and the worker verifies the generated G-code.
 - The API can upload successful G-code to the configured Moonraker printer. The web UI can start a print only after an explicit confirmation.
 - The agent CLI intentionally supports upload but has no print command. Printer motion and print authorization remain separate concerns.
