@@ -16,7 +16,7 @@ from typing import Any
 from .config import Settings
 from .schemas import BED_TYPES, SliceRequest
 from .store import JobStore
-from .thumbnail import extract_gcode_thumbnails, render_stl_thumbnails
+from .thumbnail import embed_gcode_thumbnails, extract_gcode_thumbnails, render_stl_thumbnails
 
 
 class Cancelled(RuntimeError):
@@ -285,6 +285,11 @@ def run_job(
         if stls:
             try:
                 thumbnails = render_stl_thumbnails(stls[0], output_dir)
+                embed_gcode_thumbnails(gcode, thumbnails)
+                thumbnails = extract_gcode_thumbnails(gcode, output_dir)
+                if not thumbnails:
+                    raise ValueError("embedded fallback thumbnails could not be verified")
+                log("info", f"Embedded {len(thumbnails)} fallback thumbnails in G-code")
             except ValueError as error:
                 log("warning", f"Thumbnail fallback failed: {error}")
     artifacts: dict[str, dict[str, Any]] = {}

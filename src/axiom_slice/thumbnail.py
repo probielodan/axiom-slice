@@ -4,6 +4,7 @@ import base64
 import math
 import re
 import struct
+import textwrap
 import zlib
 from collections.abc import Iterable
 from pathlib import Path
@@ -12,6 +13,7 @@ THUMBNAIL_RE = re.compile(
     r"; thumbnail begin (?P<w>\d+)x(?P<h>\d+) \d+\s*\n(?P<data>(?:; [A-Za-z0-9+/=]+\s*\n)+); thumbnail end",
     re.MULTILINE,
 )
+THUMBNAIL_NAME_RE = re.compile(r"thumbnail-(?P<w>\d+)x(?P<h>\d+)\.png$")
 
 
 def extract_gcode_thumbnails(gcode: Path, output_dir: Path) -> dict[str, Path]:
@@ -30,6 +32,30 @@ def extract_gcode_thumbnails(gcode: Path, output_dir: Path) -> dict[str, Path]:
         path.write_bytes(payload)
         artifacts[name] = path
     return artifacts
+
+
+def embed_gcode_thumbnails(gcode: Path, thumbnails: dict[str, Path]) -> None:
+    def area(item: tuple[str, Path]) -> int:
+        match = THUMBNAIL_NAME_RE.fullmatch(item[0])
+        if not match:
+            raise ValueError(f"invalid thumbnail name: {item[0]}")
+        return int(match["w"]) * int(match["h"])
+
+    blocks: list[str] = []
+    for name, path in sorted(thumbnails.items(), key=area):
+        match = THUMBNAIL_NAME_RE.fullmatch(name)
+        if not match:
+            raise ValueError(f"invalid thumbnail name: {name}")
+        payload = path.read_bytes()
+        if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError(f"thumbnail is not a PNG: {name}")
+        encoded = base64.b64encode(payload).decode()
+        lines = "\n".join(f"; {line}" for line in textwrap.wrap(encoded, 78))
+        blocks.append(f"; thumbnail begin {match['w']}x{match['h']} {len(encoded)}\n{lines}\n; thumbnail end")
+    temporary = gcode.with_suffix(gcode.suffix + ".tmp")
+    original = gcode.read_text(encoding="utf-8", errors="replace")
+    temporary.write_text("\n\n".join(blocks) + "\n\n" + original, encoding="utf-8")
+    temporary.replace(gcode)
 
 
 def _triangles(path: Path) -> list[tuple[tuple[float, float, float], ...]]:

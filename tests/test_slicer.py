@@ -82,6 +82,8 @@ def test_worker_pipeline_records_reproducible_artifacts(tmp_path: Path) -> None:
     assert result["orca"]["version"] == "fake"
     assert "triangle_PETG_23m58s.gcode" in result["artifacts"]
     assert "thumbnail-300x300.png" in result["artifacts"]
+    gcode = job_dir / result["artifacts"]["triangle_PETG_23m58s.gcode"]["path"]
+    assert gcode.read_text().count("; thumbnail begin ") == 3
     command = (job_dir / "command.txt").read_text()
     assert "--curr-bed-type 'Textured PEI Plate'" in command
     assert f"--logfile {job_dir / 'orca-native.log'}" in command
