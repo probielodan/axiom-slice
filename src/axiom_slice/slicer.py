@@ -151,6 +151,31 @@ def _profile_output_name(
     return rendered
 
 
+def _add_fallback_thumbnails(
+    gcode: Path, inputs: list[Path], output_dir: Path, log: Callable[[str, str], None]
+) -> dict[str, Path]:
+    stls = [path for path in inputs if path.suffix.lower() == ".stl"]
+    if not stls:
+        return {}
+    if len(stls) > 1:
+        log(
+            "warning",
+            "Orca produced no thumbnail; refusing to show a misleading single-model fallback for a multi-model job",
+        )
+        return {}
+    try:
+        rendered = render_stl_thumbnails(stls[0], output_dir)
+        embed_gcode_thumbnails(gcode, rendered)
+        thumbnails = extract_gcode_thumbnails(gcode, output_dir)
+        if not thumbnails:
+            raise ValueError("embedded fallback thumbnails could not be verified")
+        log("info", f"Embedded {len(thumbnails)} fallback thumbnails in G-code")
+        return thumbnails
+    except ValueError as error:
+        log("warning", f"Thumbnail fallback failed: {error}")
+        return {}
+
+
 def prepare_profiles(job_dir: Path, resolved: dict[str, Any], request: SliceRequest) -> dict[str, Path]:
     profile_dir = job_dir / "profiles"
     profile_dir.mkdir(parents=True, exist_ok=True)
@@ -281,17 +306,7 @@ def run_job(
     log("info", f"Named G-code from profile format: {gcode.name}")
     thumbnails = extract_gcode_thumbnails(gcode, output_dir)
     if not thumbnails:
-        stls = [path for path in inputs if path.suffix.lower() == ".stl"]
-        if stls:
-            try:
-                thumbnails = render_stl_thumbnails(stls[0], output_dir)
-                embed_gcode_thumbnails(gcode, thumbnails)
-                thumbnails = extract_gcode_thumbnails(gcode, output_dir)
-                if not thumbnails:
-                    raise ValueError("embedded fallback thumbnails could not be verified")
-                log("info", f"Embedded {len(thumbnails)} fallback thumbnails in G-code")
-            except ValueError as error:
-                log("warning", f"Thumbnail fallback failed: {error}")
+        thumbnails = _add_fallback_thumbnails(gcode, inputs, output_dir, log)
     artifacts: dict[str, dict[str, Any]] = {}
     candidates = [
         gcode,

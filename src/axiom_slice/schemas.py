@@ -86,6 +86,8 @@ OVERRIDE_SPECS: dict[str, dict[str, Any]] = {
         "values": ["no_brim", "auto_brim", "brim_ears", "outer_only", "inner_only", "outer_and_inner"],
         "label": "Brim type",
     },
+    "brim_width": {"type": "number", "minimum": 0, "maximum": 100, "label": "Brim width (mm)"},
+    "brim_object_gap": {"type": "number", "minimum": 0, "maximum": 10, "label": "Brim-object gap (mm)"},
 }
 
 

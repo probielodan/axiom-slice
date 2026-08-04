@@ -8,6 +8,7 @@ Axiom Slice turns the Fedora workstation's curated Creality K1 OrcaSlicer profil
 - Profiles are inherited and flattened in memory for each job. Source Orca profiles are mounted read-only and never rewritten.
 - The persistent worker slices one job at a time with no network and stores reproducible artifacts in a durable SQLite-backed queue.
 - Every job retains its inputs, request, resolved profiles, inheritance chains, command, Orca log, checksums, G-code, thumbnails, and optional 3MF.
+- Native G-code thumbnails are preferred. The STL fallback is limited to single-model jobs; multi-model jobs omit it rather than presenting one model as the whole plate. Export and inspect the 3MF when exact multi-model layout matters.
 - Build-plate selection uses Orca's `--curr-bed-type`; each filament profile remains authoritative for that plate's temperatures, and the worker verifies the generated G-code.
 - The API can upload successful G-code to the configured Moonraker printer. The web UI can start a print only after an explicit confirmation.
 - The agent CLI intentionally supports upload but has no print command. Printer motion and print authorization remain separate concerns.
@@ -70,5 +71,9 @@ Select one of the plate values returned by `axiom-slice profiles`, for example:
 ```sh
 axiom-slice submit model.stl --bed-type textured-pei
 ```
+
+For small contact patches or tall, narrow models, curated adhesion overrides include `brim_type`, `brim_width`, and `brim_object_gap`. Auto-orientation is a starting point, not proof that the selected orientation, supports, or adhesion will print reliably.
+
+The custom K1 machine profile intentionally overrides Creality's inherited start G-code without `T[initial_no_support_extruder]`. Orca expands that stock line to `T0`, but Klipper no longer provides built-in `T0` tool-change commands and the single-extruder K1 does not need one.
 
 Old terminal jobs are retained until a local administrator deliberately runs `axiom-slice-prune --older-than-days 30 --apply`; without `--apply`, it is a dry run.

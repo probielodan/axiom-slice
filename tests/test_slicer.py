@@ -4,7 +4,7 @@ from pathlib import Path
 
 from axiom_slice.config import Settings
 from axiom_slice.schemas import SliceRequest
-from axiom_slice.slicer import _short_print_time, run_job
+from axiom_slice.slicer import _add_fallback_thumbnails, _short_print_time, run_job
 from axiom_slice.store import JobStore
 
 
@@ -99,3 +99,21 @@ def test_short_print_time_matches_orca_filename_formatting() -> None:
     assert _short_print_time("23m 58s") == "23m58s"
     assert _short_print_time("1h 59m 40s") == "2h0m"
     assert _short_print_time("0.4s") == "<1s"
+
+
+def test_multi_model_job_does_not_show_single_model_fallback(tmp_path: Path) -> None:
+    events = []
+    gcode = tmp_path / "plate.gcode"
+    gcode.write_text("G28\n")
+    models = [tmp_path / "first.stl", tmp_path / "second.stl"]
+    result = _add_fallback_thumbnails(
+        gcode, models, tmp_path, lambda level, message: events.append((level, message))
+    )
+    assert result == {}
+    assert events == [
+        (
+            "warning",
+            "Orca produced no thumbnail; refusing to show a misleading single-model fallback for a multi-model job",
+        )
+    ]
+    assert gcode.read_text() == "G28\n"

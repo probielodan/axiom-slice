@@ -7,7 +7,15 @@ from axiom_slice.schemas import BED_TYPES, BedTypeName, SliceRequest
 
 
 def test_curated_overrides_are_strict() -> None:
-    request = SliceRequest(overrides={"wall_loops": 4, "enable_support": True, "sparse_infill_density": 22.5})
+    request = SliceRequest(
+        overrides={
+            "wall_loops": 4,
+            "enable_support": True,
+            "sparse_infill_density": 22.5,
+            "brim_width": 10,
+            "brim_object_gap": 0,
+        }
+    )
     assert request.overrides["wall_loops"] == 4
     with pytest.raises(ValidationError):
         SliceRequest(overrides={"definitely_not_orca": "garbage"})
@@ -15,6 +23,10 @@ def test_curated_overrides_are_strict() -> None:
         SliceRequest(overrides={"wall_loops": "four"})
     with pytest.raises(ValidationError):
         SliceRequest(overrides={"support_threshold_angle": 91})
+    with pytest.raises(ValidationError):
+        SliceRequest(overrides={"brim_width": 101})
+    with pytest.raises(ValidationError):
+        SliceRequest(overrides={"brim_object_gap": -0.1})
 
 
 def test_profile_and_project_paths_are_not_accepted() -> None:
